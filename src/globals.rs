@@ -1,16 +1,15 @@
-
-pub const lastLinear4Scaling: usize = 32;
-pub const lastLinear16Scaling: usize = 128;
-pub const largestBucketSize: usize = 1024;
-pub const log2_1024: usize = 10;
-pub const log2_128: usize = 7;
-pub const blSize: usize = lastLinear4Scaling / 4
-    + (lastLinear16Scaling - lastLinear4Scaling + 4) / 16
-    + (log2_1024 - log2_128)
+pub const LAST_LINEAR_4_SCALING: usize = 32;
+pub const LAST_LINEAR_16_SCALING: usize = 128;
+pub const LARGEST_BUCKET_SIZE: usize = 1024;
+pub const LOG2_1024: usize = 10;
+pub const LOG2_128: usize = 7;
+pub const BUCKET_LIST_SIZE: usize = LAST_LINEAR_4_SCALING / 4
+    + (LAST_LINEAR_16_SCALING - LAST_LINEAR_4_SCALING + 4) / 16
+    + (LOG2_1024 - LOG2_128)
     + 1;
 
 pub const MAX_PAGE_SIZE: usize = 0x1000_0000_0000; //2^32 byte ~ 4Gb
-pub const SMALLEST_POSSIBLE_FREE_SPACE: usize =  6; //6 byte
+pub const SMALLEST_POSSIBLE_FREE_SPACE: usize = 6; //6 byte
 
 fn log2_64(x: u64) -> usize {
     if x == 0 {
@@ -66,7 +65,6 @@ pub fn log2(x: usize) -> usize {
     }
 }
 
-
 #[test]
 pub fn test_log() {
     assert_eq!(log2_32(0xffff_ffff), 31);
@@ -105,5 +103,4 @@ pub fn test_log() {
     assert_eq!(log2_64(0x0000_0000_0000_0001), 0);
 
     assert_eq!(log2(0x10), 4);
-
 }

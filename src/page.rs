@@ -1,87 +1,92 @@
 use core::mem::{size_of_val, transmute};
 
-use crate::bucketlist::BucketList;
-use crate::codeblock;
-use crate::freespace::*;
+use crate::bucket_list::BucketList;
+use crate::code_block;
+use crate::free_space::*;
 use crate::globals::*;
 use crate::space::*;
 
 pub struct Page {
     /// Pointer to the first byte of the page
-    startOfPage: *const u8,
+    start_of_page: *const u8,
     /// Pointer to the next page
-    nextPage: *mut Self,
+    next_page: *mut Self,
     /// pointer to the leftmost byte of the static sector <br/>
     /// the rightmost byte is the last byte of the page
-    staticEnd: *const u8,
+    static_end: *const u8,
     ///pointer to the rightmost allocated byte of the dynamic sector <br/>
     ///behind this pointer can only be an allocated chunk form the static
-    ///sector. space between this pointer and the staticEnd pointer has to be free memory.
-    dynamicEnd: *const u8,
-    bucketList: BucketList,
+    ///sector. space between this pointer and the static_end pointer has to be free memory.
+    dynamic_end: *const u8,
+    bucket_list: BucketList,
 }
 
 impl Page {
     pub fn init(&mut self, page_memory: *mut u8, page_size: usize) -> Self {
         unsafe {
-            codeblock::setFree(page_memory, true);
-            let bucket_list_memory = *transmute::<*mut u8, *mut [*mut u8; blSize]>(page_memory);
-            let bucketlistSize = size_of_val(&bucket_list_memory);
-            let startOfPage = page_memory.offset(bucketlistSize as isize);
-            let mut bucketList = BucketList::new(bucket_list_memory, page_memory);
-            bucketList.addToList(Self::generateFirstBucketEntry(
-                startOfPage,
+            code_block::set_free(page_memory, true);
+            let bucket_list_memory =
+                *transmute::<*mut u8, *mut [*mut u8; BUCKET_LIST_SIZE]>(page_memory);
+            let bucket_list_size = size_of_val(&bucket_list_memory);
+            let start_of_page = page_memory.offset(bucket_list_size as isize);
+            let mut bucket_list = BucketList::new(bucket_list_memory, page_memory);
+            bucket_list.add_to_list(Self::generate_first_bucket_entry(
+                start_of_page,
                 page_memory.offset(page_size as isize),
             ));
             #[cfg(feature = "condition")]
             {
-                for i in 0..(blSize - 1) {
-                    assert!(bucketList.getFromBucketList(i).is_null());
+                for i in 0..(BUCKET_LIST_SIZE - 1) {
+                    assert!(bucket_list.get_from_bucket_list(i).is_null());
                 }
-                let blockSize = codeblock::getBlockSize(bucketList.getFromBucketList(blSize - 1));
+                let block_size = code_block::get_block_size(
+                    bucket_list.get_from_bucket_list(BUCKET_LIST_SIZE - 1),
+                );
                 assert!(
-                    codeblock::readFromLeft(bucketList.getFromBucketList(blSize - 1))
-                        == page_size - 2 * blockSize,
+                    code_block::read_from_left(
+                        bucket_list.get_from_bucket_list(BUCKET_LIST_SIZE - 1)
+                    ) == page_size - 2 * block_size,
                 );
             }
             Self {
-                nextPage: core::ptr::null_mut(),
-                startOfPage,
-                staticEnd: page_memory.offset(page_size as isize),
-                dynamicEnd: page_memory,
-                bucketList,
+                next_page: core::ptr::null_mut(),
+                start_of_page,
+                static_end: page_memory.offset(page_size as isize),
+                dynamic_end: page_memory,
+                bucket_list,
             }
         }
     }
     ////returns a new static block
-    pub unsafe fn getStaticBlock(&mut self, sizeInByte: usize) -> *mut u8 {
+    pub unsafe fn get_static_block(&mut self, size_in_byte: usize) -> *mut u8 {
         #[cfg(feature = "condition")]
         {
-            assert!(sizeInByte != 0);
-            assert!(self.staticEnd > self.dynamicEnd); //static end should come after the dynamic end
+            assert!(size_in_byte != 0);
+            assert!(self.static_end > self.dynamic_end); //static end should come after the dynamic end
         }
         #[cfg(feature = "align_static")]
         {
-            sizeInByte = Self::align(sizeInByte);
+            size_in_byte = Self::align(size_in_byte);
         }
 
-        if self.staticBlockFitInPage(sizeInByte) {
-            let (codeblocksize, _) = codeblock::readFromRight(self.staticEnd.offset(-1));
-            let lastFreeSpace = self.staticEnd.offset(-(3 * codeblocksize as isize)) as *mut u8;
-            self.bucketList.deleteFromList(lastFreeSpace);
-            self.cutRightFromFreeSpace(lastFreeSpace, sizeInByte);
-            self.bucketList.addToList(lastFreeSpace); //lastFreeSpace might get too small for its current bucket
-            self.staticEnd = self.staticEnd.offset(-(sizeInByte as isize));
+        if self.static_block_fit_in_page(size_in_byte) {
+            let (code_block_size, _) = code_block::read_from_right(self.static_end.offset(-1));
+            let last_free_space =
+                self.static_end.offset(-(3 * code_block_size as isize)) as *mut u8;
+            self.bucket_list.delete_from_list(last_free_space);
+            self.cut_right_from_free_space(last_free_space, size_in_byte);
+            self.bucket_list.add_to_list(last_free_space); //last_free_space might get too small for its current bucket
+            self.static_end = self.static_end.offset(-(size_in_byte as isize));
             #[cfg(feature = "condition")]
             {
-                assert!(self.staticEnd > self.dynamicEnd); //see above
+                assert!(self.static_end > self.dynamic_end); //see above
             }
-            return self.staticEnd as *mut u8;
+            return self.static_end as *mut u8;
         } else {
             #[cfg(feature = "condition")]
             {
-                assert!(self.staticEnd > self.dynamicEnd); //see above
-                assert!((self.staticEnd as usize - self.dynamicEnd as usize) < 6 + sizeInByte);
+                assert!(self.static_end > self.dynamic_end); //see above
+                assert!((self.static_end as usize - self.dynamic_end as usize) < 6 + size_in_byte);
                 //there actually shouldn't be enough space
             }
             return core::ptr::null_mut();
@@ -89,332 +94,341 @@ impl Page {
     }
     ///returns if a requested block size would fit in the page
     ///checks if there is enough space to begin with and if there would be enough space for a freespace(>6 byte) after insertion
-    pub fn staticBlockFitInPage(&self, blockSizeInByte: usize) -> bool {
+    pub fn static_block_fit_in_page(&self, block_size_in_byte: usize) -> bool {
         //no assertions because state isn't altered
-        (blockSizeInByte <= (self.staticEnd as usize - self.dynamicEnd as usize - 1)
-            && (self.staticEnd as usize - self.dynamicEnd as usize >= 6 + blockSizeInByte))
+        (block_size_in_byte <= (self.static_end as usize - self.dynamic_end as usize - 1)
+            && (self.static_end as usize - self.dynamic_end as usize >= 6 + block_size_in_byte))
     }
     /// tries to reserve a dynamic block in this page, and returns it
-    /// #### sizeInByte
+    /// #### size_in_byte
     /// the size of the space requested
     /// #### return
     /// a pointer to the space, or nullptr if no space was found
-    pub fn getDynamicBlock(&mut self, sizeInByte: usize) -> *mut u8 {
+    pub fn get_dynamic_block(&mut self, size_in_byte: usize) -> *mut u8 {
         #[cfg(feature = "condition")]
         {
-            assert!(sizeInByte > 0);
-            assert!(self.staticEnd > self.dynamicEnd);
+            assert!(size_in_byte > 0);
+            assert!(self.static_end > self.dynamic_end);
         }
         #[cfg(feature = "align_dynamic")]
         {
-            sizeInByte = align(sizeInByte);
+            size_in_byte = align(size_in_byte);
         }
-        let freeSpace = unsafe { self.bucketList.getFreeSpace(sizeInByte) };
-        let returnBlock = freeSpace;
-        if freeSpace.is_null() {
+        let free_space = unsafe { self.bucket_list.get_free_space(size_in_byte) };
+        let return_block = free_space;
+        if free_space.is_null() {
             #[cfg(feature = "condition")]
             {
-                assert!(self.staticEnd > self.dynamicEnd);
+                assert!(self.static_end > self.dynamic_end);
             }
             return core::ptr::null_mut();
         } else {
-            unsafe { self.bucketList.deleteFromList(freeSpace) };
-            let remainingSpace = self.cutLeftFromFreeSpace(
-                freeSpace,
-                sizeInByte + (2 * codeblock::getNeededCodeBlockSize(sizeInByte)),
+            unsafe { self.bucket_list.delete_from_list(free_space) };
+            let remaining_space = self.cut_left_from_free_space(
+                free_space,
+                size_in_byte + (2 * code_block::get_needed_code_block_size(size_in_byte)),
             );
-            if !remainingSpace.is_null() {
-                unsafe { self.bucketList.addToList(remainingSpace) };
-                unsafe { toOccupied(returnBlock, sizeInByte) };
+            if !remaining_space.is_null() {
+                unsafe { self.bucket_list.add_to_list(remaining_space) };
+                unsafe { to_occupied(return_block, size_in_byte) };
             } else {
                 //Edge Case: If the remaining space is too small to be used again, simply return a larger block
-                unsafe { codeblock::setFree(returnBlock, false) };
-                unsafe { copyCodeBlockToEnd(returnBlock, codeblock::getBlockSize(returnBlock)) };
+                unsafe { code_block::set_free(return_block, false) };
+                unsafe {
+                    copy_code_block_to_end(return_block, code_block::get_block_size(return_block))
+                };
             }
 
-            if getRightMostEnd(returnBlock) > self.dynamicEnd {
-                self.dynamicEnd = getRightMostEnd(returnBlock);
+            if get_right_most_end(return_block) > self.dynamic_end {
+                self.dynamic_end = get_right_most_end(return_block);
             }
         }
         #[cfg(feature = "condition")]
         {
-            assert!(!returnBlock.is_null());
-            assert!(self.dynamicEnd < self.staticEnd);
-            assert!(self.dynamicEnd > self.startOfPage);
-            assert!(returnBlock >= self.startOfPage as *mut u8);
-            assert!(!codeblock::isFree(returnBlock));
+            assert!(!return_block.is_null());
+            assert!(self.dynamic_end < self.static_end);
+            assert!(self.dynamic_end > self.start_of_page);
+            assert!(return_block >= self.start_of_page as *mut u8);
+            assert!(!code_block::is_free(return_block));
         }
-        returnBlock
+        return_block
     }
     /// #### return the next page in the ring storage
-    pub fn getNextPage(&self) -> *mut Self {
-        self.nextPage
+    pub fn get_next_page(&self) -> *mut Self {
+        self.next_page
     }
     /// sets the next page
-    /// #### nextPage
+    /// #### next_page
     /// the next page
-    pub fn setNextPage(&mut self, nextPage: *mut Self) {
-        if nextPage != core::ptr::null_mut() {}
-        self.nextPage = nextPage;
+    pub fn set_next_page(&mut self, next_page: *mut Self) {
+        if next_page != core::ptr::null_mut() {}
+        self.next_page = next_page;
     }
-    /// #### firstByte
+    /// #### first_byte
     /// a pointer to the block of interest
     /// #### return
     /// true if the pointer is in between the start of page and the left most byte of the static sector.
     /// false otherwise. Blocks in the static sector CANNOT be detected with this function.
-    pub fn blockIsInSpace(&self, firstByte: *const u8) -> bool {
-        self.startOfPage <= firstByte && firstByte < self.staticEnd
+    pub fn block_is_in_space(&self, first_byte: *const u8) -> bool {
+        self.start_of_page <= first_byte && first_byte < self.static_end
     }
     /// deletes a reserved block
-    /// #### firstByte
+    /// #### first_byte
     /// the first byte of the block
     /// #### return
     /// true if successful, false otherwise
-    pub fn deleteBlock(&mut self, firstByte: *const u8) -> bool {
+    pub fn delete_block(&mut self, first_byte: *const u8) -> bool {
         #[cfg(feature = "condition")]
         {
-            assert!(self.staticEnd > self.dynamicEnd);
+            assert!(self.static_end > self.dynamic_end);
         }
-        let (memoryBlockSize, codeBlockStart) =
-            unsafe { codeblock::readFromRight(firstByte.offset(-1)) };
-        let codeBlockStart = codeBlockStart as *mut u8;
-        let codeBlockSize = unsafe { codeblock::getBlockSize(codeBlockStart) };
+        let (memory_block_size, code_block_start) =
+            unsafe { code_block::read_from_right(first_byte.offset(-1)) };
+        let code_block_start = code_block_start as *mut u8;
+        let code_block_size = unsafe { code_block::get_block_size(code_block_start) };
         #[cfg(feature = "statistic")]
         {
-            Statistic::freeDynamic(memoryBlockSize, firstByte);
+            Statistic::freeDynamic(memory_block_size, first_byte);
         }
-        if (codeBlockStart as usize + (2 * codeBlockSize) + memoryBlockSize)
-            > self.staticEnd as usize
+        if (code_block_start as usize + (2 * code_block_size) + memory_block_size)
+            > self.static_end as usize
         {
             panic!("code block reaches into static space")
         }
-        let mut leftNeighbor = core::ptr::null_mut();
-        let mut rightNeighbor =
-            (codeBlockStart as usize + (2 * codeBlockSize) + memoryBlockSize) as *mut u8;
-        if rightNeighbor as usize > self.staticEnd as usize {
+        let mut left_neighbor = core::ptr::null_mut();
+        let mut right_neighbor =
+            (code_block_start as usize + (2 * code_block_size) + memory_block_size) as *mut u8;
+        if right_neighbor as usize > self.static_end as usize {
             panic!("dynamic memory links into static space")
         }
-        if self.startOfPage < codeBlockStart {
-            leftNeighbor = unsafe { getLeftNeighbor(codeBlockStart.offset(-1)) as *mut u8 };
+        if self.start_of_page < code_block_start {
+            left_neighbor = unsafe { get_left_neighbor(code_block_start.offset(-1)) as *mut u8 };
         }
-        if !leftNeighbor.is_null() && !codeblock::isFree(leftNeighbor) {
-            leftNeighbor = core::ptr::null_mut();
+        if !left_neighbor.is_null() && !code_block::is_free(left_neighbor) {
+            left_neighbor = core::ptr::null_mut();
         }
-        if !rightNeighbor.is_null()
-            && (rightNeighbor as usize >= self.staticEnd as usize
-                || !codeblock::isFree(rightNeighbor))
+        if !right_neighbor.is_null()
+            && (right_neighbor as usize >= self.static_end as usize
+                || !code_block::is_free(right_neighbor))
         {
-            rightNeighbor = core::ptr::null_mut();
+            right_neighbor = core::ptr::null_mut();
         }
-        unsafe { self.mergeFreeSpace(leftNeighbor, codeBlockStart, rightNeighbor) };
+        unsafe { self.merge_free_space(left_neighbor, code_block_start, right_neighbor) };
         #[cfg(feature = "condition")]
         {
             unsafe {
                 assert!(
-                    (leftNeighbor.is_null()
-                        && self.bucketList.isInList(codeBlockStart).0
-                        && codeblock::isFree(codeBlockStart))
-                        || (self.bucketList.isInList(leftNeighbor).0
-                            && codeblock::isFree(leftNeighbor)),
+                    (left_neighbor.is_null()
+                        && self.bucket_list.is_in_list(code_block_start).0
+                        && code_block::is_free(code_block_start))
+                        || (self.bucket_list.is_in_list(left_neighbor).0
+                            && code_block::is_free(left_neighbor)),
                 )
             };
-            assert!(self.staticEnd > self.dynamicEnd);
+            assert!(self.static_end > self.dynamic_end);
         }
         return true;
     }
     /// #### return
     /// a pointer to the first byte in the page
-    pub fn getStartOfPage(&self) -> *const u8 {
-        self.startOfPage
+    pub fn get_start_of_page(&self) -> *const u8 {
+        self.start_of_page
     }
     /// #### return
     /// a pointer to the first byte in the static area
-    pub fn getStaticEnd(&self) -> *const u8 {
-        self.staticEnd
+    pub fn get_static_end(&self) -> *const u8 {
+        self.static_end
     }
     /// #### return
     /// the dynamic end
-    pub fn getDynamicEnd(&self) -> *const u8 {
-        self.dynamicEnd
+    pub fn get_dynamic_end(&self) -> *const u8 {
+        self.dynamic_end
     }
     /// #### return
     /// the bucket list
-    pub fn getBucketList(&self) -> &BucketList {
-        &self.bucketList
+    pub fn get_bucket_list(&self) -> &BucketList {
+        &self.bucket_list
     }
     /// TODO: describe alignment
     /// align the requested block size
-    /// #### requestedSizeInByte
+    /// #### requestedsize_in_byte
     /// the needed size for the requested block
     /// #### return
     /// the aligned size of the requested block
-    fn align(requestedSizeInByte: usize) -> usize {
+    fn align(requestedsize_in_byte: usize) -> usize {
         unimplemented!()
     }
     /// Merges up to three blocks into one Block of free Space.
     /// Only free blocks are merged.
-    /// The bucketList will be updated accordingly<br/>
+    /// The bucket_list will be updated accordingly<br/>
     /// WARNING: the blocks have to be adjacent to each other. Merging distant blocks will cause undefined behavior.
     /// Probably causing the world as we know it, to cease to exist!
-    /// #### leftBlock
-    /// leftBlock to be merged. Ignored if null
-    /// #### middleBlock
+    /// #### left_block
+    /// left_block to be merged. Ignored if null
+    /// #### middle_block
     /// middle Block to be merged
-    /// #### rightBlock
+    /// #### right_block
     /// right Block to be merged. Ignored if null
     /// #### return
     /// the new block of free space
-    unsafe fn mergeFreeSpace(
+    #[inline]
+    unsafe fn merge_free_space(
         &mut self,
-        leftBlock: *mut u8,
-        middleBlock: *mut u8,
-        rightBlock: *mut u8,
+        left_block: *mut u8,
+        middle_block: *mut u8,
+        right_block: *mut u8,
     ) -> *const u8 {
         #[cfg(feature = "condition")]
         {
-            assert!(!codeblock::isFree(middleBlock));
-            assert!(rightBlock.is_null() || self.bucketList.isInList(rightBlock).0);
-            assert!(leftBlock.is_null() || self.bucketList.isInList(leftBlock).0);
+            assert!(!code_block::is_free(middle_block));
+            assert!(right_block.is_null() || self.bucket_list.is_in_list(right_block).0);
+            assert!(left_block.is_null() || self.bucket_list.is_in_list(left_block).0);
         }
-        if leftBlock.is_null() {
-            if !rightBlock.is_null() {
-                self.bucketList.deleteFromList(rightBlock);
-                self.mergeWithRight(middleBlock, rightBlock);
+        if left_block.is_null() {
+            if !right_block.is_null() {
+                self.bucket_list.delete_from_list(right_block);
+                self.merge_with_right(middle_block, right_block);
             }
-            codeblock::setFree(middleBlock, true);
-            copyCodeBlockToEnd(middleBlock, codeblock::getBlockSize(middleBlock));
-            self.bucketList.addToList(middleBlock);
+            code_block::set_free(middle_block, true);
+            copy_code_block_to_end(middle_block, code_block::get_block_size(middle_block));
+            self.bucket_list.add_to_list(middle_block);
             #[cfg(feature = "condition")]
             {
-                assert!(codeblock::isFree(middleBlock));
-                assert!(self.bucketList.isInList(middleBlock).0);
+                assert!(code_block::is_free(middle_block));
+                assert!(self.bucket_list.is_in_list(middle_block).0);
             }
-            return middleBlock;
+            return middle_block;
         } else {
-            if !rightBlock.is_null() {
-                self.bucketList.deleteFromList(rightBlock);
-                self.mergeWithRight(middleBlock, rightBlock);
+            if !right_block.is_null() {
+                self.bucket_list.delete_from_list(right_block);
+                self.merge_with_right(middle_block, right_block);
             }
-            self.bucketList.deleteFromList(leftBlock);
+            self.bucket_list.delete_from_list(left_block);
 
-            self.mergeWithLeft(leftBlock, middleBlock);
-            codeblock::setFree(leftBlock, true);
-            copyCodeBlockToEnd(leftBlock, codeblock::getBlockSize(leftBlock));
-            self.bucketList.addToList(leftBlock);
+            self.merge_with_left(left_block, middle_block);
+            code_block::set_free(left_block, true);
+            copy_code_block_to_end(left_block, code_block::get_block_size(left_block));
+            self.bucket_list.add_to_list(left_block);
             #[cfg(feature = "condition")]
             {
-                assert!(codeblock::isFree(leftBlock));
-                assert!(self.bucketList.isInList(leftBlock).0);
+                assert!(code_block::is_free(left_block));
+                assert!(self.bucket_list.is_in_list(left_block).0);
             }
-            leftBlock
+            left_block
         }
     }
     /// Merges both blocks to one. The types of Blocks are ignored.
-    unsafe fn mergeWithLeft(&self, leftBlock: *mut u8, middleBlock: *const u8) {
+    #[inline]
+    unsafe fn merge_with_left(&self, left_block: *mut u8, middle_block: *const u8) {
         #[cfg(feature = "condition")]
         {
-            assert!(codeblock::isFree(leftBlock));
+            assert!(code_block::is_free(left_block));
         }
-        let leftEnd = leftBlock;
-        let rightEnd = getRightMostEnd(middleBlock);
-        let (codeBLockSize, _) = codeblock::getCodeBlockForInternalSize(
-            leftEnd,
-            rightEnd as usize - leftEnd as usize + 1,
+        let left_end = left_block;
+        let right_end = get_right_most_end(middle_block);
+        let (code_block_size, _) = code_block::get_code_block_for_internal_size(
+            left_end,
+            right_end as usize - left_end as usize + 1,
             true,
         );
-        copyCodeBlockToEnd(leftEnd, codeBLockSize);
+        copy_code_block_to_end(left_end, code_block_size);
         #[cfg(feature = "condition")]
         {
-            assert!(codeblock::isFree(leftEnd));
+            assert!(code_block::is_free(left_end));
             assert!(
-                codeblock::readFromLeft(leftEnd)
-                    == rightEnd as usize - leftEnd as usize - 2 * codeBLockSize + 1
+                code_block::read_from_left(left_end)
+                    == right_end as usize - left_end as usize - 2 * code_block_size + 1
             );
         }
     }
     //// Merges both blocks to one. The types of Blocks are ignored.
-    unsafe fn mergeWithRight(&self, middleBlock: *const u8, rightBlock: *const u8) {
+    #[inline]
+    unsafe fn merge_with_right(&self, middle_block: *const u8, right_block: *const u8) {
         #[cfg(feature = "condition")]
         {
-            assert!(codeblock::isFree(rightBlock));
+            assert!(code_block::is_free(right_block));
         }
-        let leftEnd = middleBlock as *mut u8;
-        let rightEnd = getRightMostEnd(rightBlock);
-        let (codeBLockSize, _) = codeblock::getCodeBlockForInternalSize(
-            leftEnd,
-            rightEnd as usize - leftEnd as usize + 1,
+        let left_end = middle_block as *mut u8;
+        let right_end = get_right_most_end(right_block);
+        let (code_block_size, _) = code_block::get_code_block_for_internal_size(
+            left_end,
+            right_end as usize - left_end as usize + 1,
             true,
         );
-        copyCodeBlockToEnd(leftEnd, codeBLockSize);
+        copy_code_block_to_end(left_end, code_block_size);
         #[cfg(feature = "condition")]
         {
-            assert!(codeblock::isFree(middleBlock));
+            assert!(code_block::is_free(middle_block));
             assert!(
-                codeblock::readFromLeft(leftEnd)
-                    == rightEnd as usize - leftEnd as usize - 2 * codeBLockSize + 1
+                code_block::read_from_left(left_end)
+                    == right_end as usize - left_end as usize - 2 * code_block_size + 1
             );
         }
     }
     /// Takes free space und cut the specified amount from space, starting at the left end. The new block has the adapted
     /// code blocks with the new size.
-    /// #### freeSpace
+    /// #### free_space
     /// space to be cut
     /// #### bytesToCutOf
     /// amount of bytes to cut off from the left
     /// #### return
     /// null if the resulting block would be smaller than the smallest addressable block. A pointer to the
     /// resulting block otherwise
-    fn cutLeftFromFreeSpace(&self, mut freeSpace: *mut u8, bytesToCutOf: usize) -> *mut u8 {
+    #[inline]
+    fn cut_left_from_free_space(&self, mut free_space: *mut u8, bytes_to_cut_of: usize) -> *mut u8 {
         #[cfg(feature = "condition")]
         {
             assert!(
-                freeSpace >= self.startOfPage as *mut u8
-                    && freeSpace < self.getStaticEnd() as *mut u8
+                free_space >= self.start_of_page as *mut u8
+                    && free_space < self.static_end as *mut u8
             );
-            assert!(getSize(freeSpace) >= bytesToCutOf);
+            assert!(get_size(free_space) >= bytes_to_cut_of);
         }
-        if (getSize(freeSpace) as usize - bytesToCutOf) < SMALLEST_POSSIBLE_FREE_SPACE {
+        if (get_size(free_space) as usize - bytes_to_cut_of) < SMALLEST_POSSIBLE_FREE_SPACE {
             #[cfg(feature = "condition")]
             {}
             return core::ptr::null_mut();
         } else {
-            freeSpace =
-                unsafe { pushBeginningRight(freeSpace, freeSpace.offset(bytesToCutOf as isize)) };
+            free_space = unsafe {
+                push_beginning_right(free_space, free_space.offset(bytes_to_cut_of as isize))
+            };
             #[cfg(feature = "condition")]
             {
                 unsafe {
                     assert!(
-                        getNext(freeSpace, self.startOfPage).is_null()
-                            || (getNext(freeSpace, self.startOfPage)
-                                >= self.startOfPage as *mut u8
-                                && getNext(freeSpace, self.startOfPage)
-                                    < self.staticEnd as *mut u8),
+                        get_next(free_space, self.start_of_page).is_null()
+                            || (get_next(free_space, self.start_of_page)
+                                >= self.start_of_page as *mut u8
+                                && get_next(free_space, self.start_of_page)
+                                    < self.static_end as *mut u8),
                     )
                 };
-                assert!(getSize(freeSpace) >= 6);
+                assert!(get_size(free_space) >= 6);
             }
-            return freeSpace;
+            return free_space;
         }
     }
     /// Takes free space und cut the specified amount from space, starting at the right end. The new block has the adapted
     /// code blocks with the new size.
-    /// #### freeSpace
+    /// #### free_space
     /// space to be cut
     /// #### bytesToCutOf
     /// amount of bytes to cut off from the left
     /// #### return
     /// null if the resulting block would be smaller than the smallest addressable block. A pointer to the
     /// resulting block otherwise
-    fn cutRightFromFreeSpace(&self, freeSpace: *mut u8, bytesToCutOf: usize) -> *mut u8 {
+    #[inline]
+    fn cut_right_from_free_space(&self, free_space: *mut u8, bytes_to_cut_of: usize) -> *mut u8 {
         #[cfg(feature = "condition")]
         {
-            assert!(getSize(freeSpace) >= bytesToCutOf); //there must be enough space in the freespace
+            assert!(get_size(free_space) >= bytes_to_cut_of); //there must be enough space in the freespace
             assert!(
-                freeSpace >= self.startOfPage as *mut u8 && freeSpace < self.staticEnd as *mut u8
+                free_space >= self.start_of_page as *mut u8
+                    && free_space < self.static_end as *mut u8
             );
             //the freespace must be in the page
         }
-        if (getSize(freeSpace) - bytesToCutOf) < SMALLEST_POSSIBLE_FREE_SPACE {
+        if (get_size(free_space) - bytes_to_cut_of) < SMALLEST_POSSIBLE_FREE_SPACE {
             #[cfg(feature = "condition")]
             {
                 //see if clause
@@ -422,9 +436,9 @@ impl Page {
             return core::ptr::null_mut();
         } else {
             unsafe {
-                pushEndLeft(
-                    freeSpace,
-                    getRightMostEnd(freeSpace).offset(-(bytesToCutOf as isize)),
+                push_end_left(
+                    free_space,
+                    get_right_most_end(free_space).offset(-(bytes_to_cut_of as isize)),
                 )
             };
             #[cfg(feature = "condition")]
@@ -432,31 +446,35 @@ impl Page {
                 unsafe {
                     //the next pointer must either be the invalid pointer or must point into the page
                     assert!(
-                        getNext(freeSpace, self.startOfPage).is_null()
-                            || (getNext(freeSpace, self.startOfPage)
-                                >= self.startOfPage as *mut u8
-                                && getNext(freeSpace, self.startOfPage)
-                                    < self.staticEnd as *mut u8),
+                        get_next(free_space, self.start_of_page).is_null()
+                            || (get_next(free_space, self.start_of_page)
+                                >= self.start_of_page as *mut u8
+                                && get_next(free_space, self.start_of_page)
+                                    < self.static_end as *mut u8),
                     )
                 };
-                assert!(freeSpace >= self.startOfPage as *mut u8); //freespace must still be in the page
-                assert!(getRightMostEnd(freeSpace) < self.staticEnd); //freespace may not go into the static area
+                assert!(free_space >= self.start_of_page as *mut u8); //freespace must still be in the page
+                assert!(get_right_most_end(free_space) < self.static_end); //freespace may not go into the static area
             }
-            freeSpace
+            free_space
         }
     }
     /// generates the first bucket entry
     /// #### return
     /// the first bucket entry
-    unsafe fn generateFirstBucketEntry(startOfPage: *mut u8, end_of_page: *const u8) -> *mut u8 {
-        let freeSpace = startOfPage;
-        let (codeBlockSize, _) = codeblock::getCodeBlockForInternalSize(
-            startOfPage,
-            end_of_page as usize - startOfPage as usize,
+    #[inline]
+    unsafe fn generate_first_bucket_entry(
+        start_of_page: *mut u8,
+        end_of_page: *const u8,
+    ) -> *mut u8 {
+        let free_space = start_of_page;
+        let (code_block_size, _) = code_block::get_code_block_for_internal_size(
+            start_of_page,
+            end_of_page as usize - start_of_page as usize,
             true,
         );
-        copyCodeBlockToEnd(freeSpace, codeBlockSize);
-        setNext(freeSpace, core::ptr::null(), startOfPage);
-        return freeSpace;
+        copy_code_block_to_end(free_space, code_block_size);
+        set_next(free_space, core::ptr::null(), start_of_page);
+        return free_space;
     }
 }
