@@ -132,12 +132,12 @@ pub unsafe fn get_code_block_for_payload_size(
     left_start_of_block: *mut u8,
     memory_block_size: usize,
     return_array_size: *mut usize,
-    isFree: bool,
+    isfree: bool,
 ) -> *const u8 {
     if memory_block_size <= 63 {
         *return_array_size = 1;
         *left_start_of_block = (memory_block_size | 128) as u8;
-        set_free(left_start_of_block, isFree);
+        set_free(left_start_of_block, isfree);
         return left_start_of_block;
     }
     //calculate how many bytes are needed
@@ -150,7 +150,7 @@ pub unsafe fn get_code_block_for_payload_size(
     get_code_block_for_payload_size2(
         left_start_of_block,
         memory_block_size,
-        isFree,
+        isfree,
         *return_array_size,
     )
 }
@@ -166,30 +166,34 @@ pub unsafe fn get_code_block_for_payload_size(
 pub unsafe fn get_code_block_for_internal_size(
     left_start_of_block: *mut u8,
     internally_needed_size: usize,
-    isFree: bool,
+    isfree: bool,
 ) -> (usize, *mut u8) {
     #[cfg(feature = "condition")]
     {
         assert!(internally_needed_size >= 4); //trivial.
     }
     let mut return_array_size = 1;
-    while get_needed_code_block_size(internally_needed_size - 2 * return_array_size) > return_array_size {
+    while get_needed_code_block_size(internally_needed_size - 2 * return_array_size)
+        > return_array_size
+    {
         return_array_size = return_array_size + 1;
     }
     let return_byte = get_code_block_for_payload_size2(
         left_start_of_block,
         internally_needed_size - 2 * return_array_size,
-        isFree,
+        isfree,
         return_array_size,
     );
     #[cfg(feature = "condition")]
     {
         assert!(return_array_size == get_block_size(left_start_of_block));
-        assert!(match isFree {
+        assert!(match isfree {
             true => *left_start_of_block & 64 > 0,
             false => *left_start_of_block & 64 == 0,
         });
-        assert!(read_from_left(left_start_of_block) >= internally_needed_size - 2 * return_array_size);
+        assert!(
+            read_from_left(left_start_of_block) >= internally_needed_size - 2 * return_array_size
+        );
     }
     return (return_array_size, return_byte);
 }
@@ -276,7 +280,7 @@ pub fn get_needed_code_block_size(mut size_to_encode: usize) -> usize {
 /// the beginning of the codeBlock starting from the left (return and this pointer should be the same)  
 /// #### memory_block_size
 /// size of the memory block which should be represented by the CodeBlock  
-/// #### isFree
+/// #### isfree
 ///  wether the codeBlock encode a free or used space  
 /// #### code_block_size
 /// size of the CodeBlock in Bytes  
@@ -285,7 +289,7 @@ pub fn get_needed_code_block_size(mut size_to_encode: usize) -> usize {
 unsafe fn get_code_block_for_payload_size2(
     left_start_of_block: *mut u8,
     mut memory_block_size: usize,
-    is_Free: bool,
+    isfree: bool,
     code_block_size: usize,
 ) -> *mut u8 {
     #[cfg(feature = "condition")]
@@ -295,11 +299,11 @@ unsafe fn get_code_block_for_payload_size2(
     }
     if code_block_size == 1 {
         *left_start_of_block = (memory_block_size | 128) as u8;
-        set_free(left_start_of_block, is_Free);
+        set_free(left_start_of_block, isfree);
         #[cfg(feature = "condition")]
         {
             assert!(*left_start_of_block & 128 > 0);
-            assert!(is_free(left_start_of_block) == is_Free);
+            assert!(is_free(left_start_of_block) == isfree);
             assert!(read_from_left(left_start_of_block) == memory_block_size);
         }
         return left_start_of_block;
@@ -318,11 +322,11 @@ unsafe fn get_code_block_for_payload_size2(
         } else if current == left_start_of_block {
             //current is the leftmost byte
             *current = (memory_block_size & 63) as u8;
-            set_free(left_start_of_block, is_Free);
+            set_free(left_start_of_block, isfree);
             #[cfg(feature = "condition")]
             {
                 assert!(*left_start_of_block & 128 == 0);
-                assert!(is_free(left_start_of_block) == is_Free);
+                assert!(is_free(left_start_of_block) == isfree);
             }
             return left_start_of_block;
         } else {

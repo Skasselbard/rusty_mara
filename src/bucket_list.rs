@@ -13,8 +13,6 @@ pub struct BucketList {
     start_of_page: *const u8,
 }
 impl BucketList {
-    /// #### size
-    /// #### return
     /// null if bucket is empty, the last element otherwise
     fn get_last_in_bucket(&self, size: usize) -> *const u8 {
         let mut current_element = self.bucket_list[size];
@@ -168,10 +166,6 @@ impl BucketList {
             assert!(self.is_in_list(free_space).0);
         }
         true
-    }
-
-    fn set_start_of_page(&mut self, start_of_page: *const u8) {
-        self.start_of_page = start_of_page;
     }
 
     pub fn get_from_bucket_list(&self, index: usize) -> *mut u8 {

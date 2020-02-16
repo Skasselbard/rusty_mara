@@ -180,22 +180,6 @@ pub unsafe fn write_next_pointer(next_pointer: NextPointerType, left_code_block:
 }
 
 #[inline]
-unsafe fn copy_next_pointer_from_end_to_front(
-    front: *mut NextPointerType,
-    end: *const NextPointerType,
-) -> bool {
-    *front = *end;
-    return true;
-}
-#[inline]
-unsafe fn copy_next_pointer_from_front_to_end(
-    front: *const NextPointerType,
-    end: *mut NextPointerType,
-) -> bool {
-    *end = *front;
-    return true;
-}
-#[inline]
 fn get_left_next(left_most_end: *const u8, code_block_size: usize) -> *mut NextPointerType {
     (left_most_end as usize + code_block_size) as *mut NextPointerType
 }

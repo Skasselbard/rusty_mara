@@ -249,15 +249,6 @@ impl Page {
     pub fn get_bucket_list(&self) -> &BucketList {
         &self.bucket_list
     }
-    /// TODO: describe alignment
-    /// align the requested block size
-    /// #### requestedsize_in_byte
-    /// the needed size for the requested block
-    /// #### return
-    /// the aligned size of the requested block
-    fn align(requestedsize_in_byte: usize) -> usize {
-        unimplemented!()
-    }
     /// Merges up to three blocks into one Block of free Space.
     /// Only free blocks are merged.
     /// The bucket_list will be updated accordingly<br/>
