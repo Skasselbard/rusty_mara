@@ -1,5 +1,5 @@
 use crate::page::Page;
-use crate::space::*;
+use crate::AllocationData;
 use crate::MaraError;
 use core::mem::size_of;
 use core::result::Result;
@@ -22,19 +22,26 @@ pub struct PageList {
 }
 
 impl PageList {
-    pub fn new(page_size: usize, data: *mut u8, data_size: usize, list_memory_size: usize) -> Self {
+    pub fn new(
+        page_size: usize,
+        data: *mut u8,
+        data_size: usize,
+        list_memory_size: usize,
+    ) -> Result<Self, MaraError> {
+        // push the page memory left to fit in the page objects
         let data = unsafe { data.offset((list_memory_size * size_of::<*mut Page>()) as isize) };
-        let first_page =
-            unsafe { (&mut (*(data as *mut Page)).init(data, page_size)) as *mut Page };
+        // initialize the first page
+        let first_page = data as *mut Page;
+        unsafe { (*first_page).init(data, page_size)? };
         unsafe { (*first_page).set_next_page(first_page) };
-        Self {
+        Ok(Self {
             page_size,
             first_page,
             page_count: 1,
             list_memory_size,
             data,
             data_size: data_size - list_memory_size,
-        }
+        })
     }
     /// sets the page size
     /// #### size_in_byte
@@ -51,68 +58,20 @@ impl PageList {
         self.first_page
     }
 
-    /// reserves a new static block
-    /// static blocks cannot be deleted but can be stored without additional management information
     /// #### size_in_byte
     /// size of the block
     /// #### return
     /// a pointer to the block
-    pub fn static_new(&mut self, size_in_byte: usize) -> *mut u8 {
-        #[cfg(feature = "condition")]
-        {
-            assert!(size_in_byte != 0); //self-explainatory
-        }
+    pub fn dynamic_new(&mut self, alloc_data: &mut AllocationData) -> Result<(), MaraError> {
+        alloc_data.check_space_size(1, self.page_size)?;
         let current_page = self.first_page;
-        let mut return_block;
         loop {
-            return_block = unsafe { (*current_page).get_static_block(size_in_byte) };
-            if return_block.is_null() {
+            unsafe { (*current_page).get_dynamic_block(alloc_data)? };
+            if alloc_data.data_start()?.is_null() {
                 break;
             }
-            if self.iterate_page(current_page).is_err() {
-                return_block = core::ptr::null_mut();
-                break;
-            }
+            self.iterate_page(current_page)?;
         }
-        #[cfg(feature = "statistic")]
-        {
-            Statistic::newStatic(size_in_byte, return_block);
-        }
-        #[cfg(feature = "condition")]
-        {
-            unsafe {
-                assert!(return_block == (*current_page).get_static_end() as *mut u8); //the returned block must be at the top of the static area
-                assert!(
-                    return_block as usize + size_in_byte
-                        <= (*current_page).get_start_of_page() as usize + self.page_size
-                );
-                //the returned block may not go over the page boundaries
-            }
-        }
-        self.first_page = current_page;
-        return return_block;
-    }
-    /// #### size_in_byte
-    /// size of the block
-    /// #### return
-    /// a pointer to the block
-    pub fn dynamic_new(&mut self, size_in_byte: usize) -> *mut u8 {
-        #[cfg(feature = "condition")]
-        {
-            assert!(size_in_byte > 0);
-        }
-        let current_page = self.first_page;
-        let mut return_block;
-        loop {
-            return_block = unsafe { (*current_page).get_dynamic_block(size_in_byte) };
-            if return_block.is_null() {
-                break;
-            }
-            if self.iterate_page(current_page).is_err() {
-                return core::ptr::null_mut();
-            }
-        }
-        let start_of_space = get_start_of_space(return_block);
         #[cfg(feature = "statistic")]
         {
             byte * hurr = nullptr;
@@ -121,32 +80,27 @@ impl PageList {
                 start_of_space,
             );
         }
-        #[cfg(feature = "condition")]
+        #[cfg(feature = "consistency-checks")]
         {
             unsafe {
-                assert!(
-                    return_block >= (*current_page).get_start_of_page() as *mut u8
-                        && return_block < (*current_page).get_static_end() as *mut u8,
-                );
+                assert!(alloc_data.data_start()? >= (*current_page).start_of_page() as *mut u8);
             }
         }
         self.first_page = current_page;
-        start_of_space
+        Ok(())
     }
     /// frees a dynamic block
     /// #### address
     /// a pointer to the block
-    /// #### return
-    /// if it was successful
-    pub fn dynamic_delete(&mut self, address: *const u8) -> bool {
+    pub fn dynamic_delete(&mut self, address: *mut u8) -> Result<(), MaraError> {
+        let mut alloc_data = AllocationData::new();
+        alloc_data.set_space(address);
         let current_page = unsafe { &mut *(self.first_page) };
         while !current_page.block_is_in_space(address) {
-            if self.iterate_page(current_page).is_err() {
-                return false;
-            }
+            self.iterate_page(current_page)?;
         }
-        current_page.delete_block(address);
-        return true;
+        current_page.delete_block(&mut alloc_data)?;
+        Ok(())
     }
     /// #### return
     /// how many pages are in the cyclic list

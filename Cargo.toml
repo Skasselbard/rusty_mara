@@ -7,11 +7,13 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+#[devdependencies]
+rand = {version="0.7.3", features = ["small_rng"]}
 
 [features]
-default = ["bit32", "condition"]
+default = ["bit32", "consistency-checks"]
 bit32 = []
 bit16 = []
 bit8 = []
-condition = []
+consistency-checks = []
 statistic = []

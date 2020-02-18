@@ -1,10 +1,9 @@
-use core::mem::{size_of_val, transmute};
-
 use crate::bucket_list::BucketList;
 use crate::code_block;
 use crate::free_space::*;
 use crate::globals::*;
 use crate::space::*;
+use crate::{AllocationData, MaraError};
 
 pub struct Page {
     /// Pointer to the first byte of the page
@@ -13,7 +12,7 @@ pub struct Page {
     next_page: *mut Self,
     /// pointer to the leftmost byte of the static sector <br/>
     /// the rightmost byte is the last byte of the page
-    static_end: *const u8,
+    end_of_page: *const u8,
     ///pointer to the rightmost allocated byte of the dynamic sector <br/>
     ///behind this pointer can only be an allocated chunk form the static
     ///sector. space between this pointer and the static_end pointer has to be free memory.
@@ -22,136 +21,76 @@ pub struct Page {
 }
 
 impl Page {
-    pub fn init(&mut self, page_memory: *mut u8, page_size: usize) -> Self {
+    pub fn init(&mut self, page_memory: *mut u8, page_size: usize) -> Result<(), MaraError> {
         unsafe {
+            let this = self as *mut Page;
             code_block::set_free(page_memory, true);
-            let bucket_list_memory =
-                *transmute::<*mut u8, *mut [*mut u8; BUCKET_LIST_SIZE]>(page_memory);
-            let bucket_list_size = size_of_val(&bucket_list_memory);
-            let start_of_page = page_memory.offset(bucket_list_size as isize);
-            let mut bucket_list = BucketList::new(bucket_list_memory, page_memory);
-            bucket_list.add_to_list(Self::generate_first_bucket_entry(
-                start_of_page,
-                page_memory.offset(page_size as isize),
-            ));
-            #[cfg(feature = "condition")]
+            self.bucket_list.init(this);
+            let mut alloc_data = AllocationData::new();
+            alloc_data.set_data_start(page_memory);
+            alloc_data.set_data_end(page_memory.add(page_size));
+            alloc_data.set_page(self);
+            Self::generate_first_bucket_entry(&mut alloc_data)?;
+            self.bucket_list.add_to_list(&mut alloc_data)?;
+            #[cfg(feature = "consistency-checks")]
             {
                 for i in 0..(BUCKET_LIST_SIZE - 1) {
-                    assert!(bucket_list.get_from_bucket_list(i).is_null());
+                    assert!(self.bucket_list.get_from_bucket_list(i).is_null());
                 }
                 let block_size = code_block::get_block_size(
-                    bucket_list.get_from_bucket_list(BUCKET_LIST_SIZE - 1),
+                    self.bucket_list.get_from_bucket_list(BUCKET_LIST_SIZE - 1),
                 );
                 assert!(
                     code_block::read_from_left(
-                        bucket_list.get_from_bucket_list(BUCKET_LIST_SIZE - 1)
-                    ) == page_size - 2 * block_size,
+                        self.bucket_list.get_from_bucket_list(BUCKET_LIST_SIZE - 1)
+                    ) == (page_size - 2 * block_size),
                 );
             }
-            Self {
-                next_page: core::ptr::null_mut(),
-                start_of_page,
-                static_end: page_memory.offset(page_size as isize),
-                dynamic_end: page_memory,
-                bucket_list,
-            }
+            self.next_page = core::ptr::null_mut();
+            self.start_of_page = page_memory;
+            self.end_of_page = page_memory.offset(page_size as isize);
+            self.dynamic_end = page_memory;
         }
-    }
-    ////returns a new static block
-    pub unsafe fn get_static_block(&mut self, size_in_byte: usize) -> *mut u8 {
-        #[cfg(feature = "condition")]
-        {
-            assert!(size_in_byte != 0);
-            assert!(self.static_end > self.dynamic_end); //static end should come after the dynamic end
-        }
-        #[cfg(feature = "align_static")]
-        {
-            size_in_byte = Self::align(size_in_byte);
-        }
-
-        if self.static_block_fit_in_page(size_in_byte) {
-            let (code_block_size, _) = code_block::read_from_right(self.static_end.offset(-1));
-            let last_free_space =
-                self.static_end.offset(-(3 * code_block_size as isize)) as *mut u8;
-            self.bucket_list.delete_from_list(last_free_space);
-            self.cut_right_from_free_space(last_free_space, size_in_byte);
-            self.bucket_list.add_to_list(last_free_space); //last_free_space might get too small for its current bucket
-            self.static_end = self.static_end.offset(-(size_in_byte as isize));
-            #[cfg(feature = "condition")]
-            {
-                assert!(self.static_end > self.dynamic_end); //see above
-            }
-            return self.static_end as *mut u8;
-        } else {
-            #[cfg(feature = "condition")]
-            {
-                assert!(self.static_end > self.dynamic_end); //see above
-                assert!((self.static_end as usize - self.dynamic_end as usize) < 6 + size_in_byte);
-                //there actually shouldn't be enough space
-            }
-            return core::ptr::null_mut();
-        }
-    }
-    ///returns if a requested block size would fit in the page
-    ///checks if there is enough space to begin with and if there would be enough space for a freespace(>6 byte) after insertion
-    pub fn static_block_fit_in_page(&self, block_size_in_byte: usize) -> bool {
-        //no assertions because state isn't altered
-        (block_size_in_byte <= (self.static_end as usize - self.dynamic_end as usize - 1)
-            && (self.static_end as usize - self.dynamic_end as usize >= 6 + block_size_in_byte))
+        Ok(())
     }
     /// tries to reserve a dynamic block in this page, and returns it
     /// #### size_in_byte
     /// the size of the space requested
     /// #### return
     /// a pointer to the space, or nullptr if no space was found
-    pub fn get_dynamic_block(&mut self, size_in_byte: usize) -> *mut u8 {
-        #[cfg(feature = "condition")]
-        {
-            assert!(size_in_byte > 0);
-            assert!(self.static_end > self.dynamic_end);
-        }
-        #[cfg(feature = "align_dynamic")]
-        {
-            size_in_byte = align(size_in_byte);
-        }
-        let free_space = unsafe { self.bucket_list.get_free_space(size_in_byte) };
-        let return_block = free_space;
-        if free_space.is_null() {
-            #[cfg(feature = "condition")]
-            {
-                assert!(self.static_end > self.dynamic_end);
-            }
-            return core::ptr::null_mut();
+    pub fn get_dynamic_block(&mut self, alloc_data: &mut AllocationData) -> Result<(), MaraError> {
+        alloc_data.set_page(self);
+        alloc_data.check_space_size(1, self.page_size())?;
+        self.check_integrity()?;
+        unsafe { self.bucket_list.get_free_space(alloc_data)? };
+        if alloc_data.space()?.is_null() {
+            self.check_integrity()?;
+            return Err(MaraError::NoFittingSpace);
         } else {
-            unsafe { self.bucket_list.delete_from_list(free_space) };
-            let remaining_space = self.cut_left_from_free_space(
-                free_space,
-                size_in_byte + (2 * code_block::get_needed_code_block_size(size_in_byte)),
-            );
-            if !remaining_space.is_null() {
-                unsafe { self.bucket_list.add_to_list(remaining_space) };
-                unsafe { to_occupied(return_block, size_in_byte) };
+            unsafe { self.bucket_list.delete_from_list(alloc_data)? };
+            let did_cut = self.cut_left_from_free_space(
+                alloc_data,
+                alloc_data.space_size()?
+                    + (2 * code_block::get_needed_code_block_size(alloc_data.space_size()?)),
+            )?;
+            if !did_cut {
+                unsafe { self.bucket_list.add_to_list(alloc_data)? };
+                unsafe { to_occupied(alloc_data)? };
             } else {
                 //Edge Case: If the remaining space is too small to be used again, simply return a larger block
-                unsafe { code_block::set_free(return_block, false) };
-                unsafe {
-                    copy_code_block_to_end(return_block, code_block::get_block_size(return_block))
-                };
+                unsafe { code_block::set_free(alloc_data.data_start()?, false) };
+                unsafe { copy_code_block_to_end(alloc_data)? };
             }
 
-            if get_right_most_end(return_block) > self.dynamic_end {
-                self.dynamic_end = get_right_most_end(return_block);
+            if alloc_data.data_end()? as usize > self.dynamic_end as usize {
+                self.dynamic_end = alloc_data.data_end()?;
             }
         }
-        #[cfg(feature = "condition")]
-        {
-            assert!(!return_block.is_null());
-            assert!(self.dynamic_end < self.static_end);
-            assert!(self.dynamic_end > self.start_of_page);
-            assert!(return_block >= self.start_of_page as *mut u8);
-            assert!(!code_block::is_free(return_block));
-        }
-        return_block
+        self.check_integrity()?;
+        self.check_alloc(alloc_data)?;
+        alloc_data.check_space()?;
+        alloc_data.check_consistency()?;
+        Ok(())
     }
     /// #### return the next page in the ring storage
     pub fn get_next_page(&self) -> *mut Self {
@@ -170,83 +109,82 @@ impl Page {
     /// true if the pointer is in between the start of page and the left most byte of the static sector.
     /// false otherwise. Blocks in the static sector CANNOT be detected with this function.
     pub fn block_is_in_space(&self, first_byte: *const u8) -> bool {
-        self.start_of_page <= first_byte && first_byte < self.static_end
+        self.start_of_page <= first_byte && first_byte < self.end_of_page
     }
     /// deletes a reserved block
     /// #### first_byte
     /// the first byte of the block
     /// #### return
     /// true if successful, false otherwise
-    pub fn delete_block(&mut self, first_byte: *const u8) -> bool {
-        #[cfg(feature = "condition")]
-        {
-            assert!(self.static_end > self.dynamic_end);
-        }
+    pub fn delete_block(&mut self, alloc_data: &mut AllocationData) -> Result<(), MaraError> {
+        alloc_data.set_page(self);
+        self.check_integrity()?;
         let (memory_block_size, code_block_start) =
-            unsafe { code_block::read_from_right(first_byte.offset(-1)) };
-        let code_block_start = code_block_start as *mut u8;
+            unsafe { code_block::read_from_right(alloc_data.data_start()?.offset(-1)) };
+        alloc_data.set_data_start(code_block_start as *mut u8);
+        alloc_data.set_space_size(memory_block_size);
         let code_block_size = unsafe { code_block::get_block_size(code_block_start) };
         #[cfg(feature = "statistic")]
         {
             Statistic::freeDynamic(memory_block_size, first_byte);
         }
         if (code_block_start as usize + (2 * code_block_size) + memory_block_size)
-            > self.static_end as usize
+            > self.end_of_page as usize
         {
             panic!("code block reaches into static space")
         }
-        let mut left_neighbor = core::ptr::null_mut();
-        let mut right_neighbor =
-            (code_block_start as usize + (2 * code_block_size) + memory_block_size) as *mut u8;
-        if right_neighbor as usize > self.static_end as usize {
-            panic!("dynamic memory links into static space")
+        let mut left_neighbor = AllocationData::new();
+        left_neighbor.set_page(alloc_data.page()?);
+        let mut right_neighbor = AllocationData::new();
+        right_neighbor.set_page(alloc_data.page()?);
+        right_neighbor.set_data_start(unsafe {
+            code_block_start.add(2 * code_block_size + memory_block_size) as *mut u8
+        });
+        if right_neighbor.data_start()? as usize > self.end_of_page as usize {
+            return Err(MaraError::PageOverflow);
         }
         if self.start_of_page < code_block_start {
-            left_neighbor = unsafe { get_left_neighbor(code_block_start.offset(-1)) as *mut u8 };
+            left_neighbor.set_data_start(get_left_neighbor(alloc_data)? as *mut u8);
         }
-        if !left_neighbor.is_null() && !code_block::is_free(left_neighbor) {
-            left_neighbor = core::ptr::null_mut();
-        }
-        if !right_neighbor.is_null()
-            && (right_neighbor as usize >= self.static_end as usize
-                || !code_block::is_free(right_neighbor))
+        if !left_neighbor.data_start().is_err() && !code_block::is_free(left_neighbor.data_start()?)
         {
-            right_neighbor = core::ptr::null_mut();
+            left_neighbor.set_data_start(core::ptr::null_mut());
         }
-        unsafe { self.merge_free_space(left_neighbor, code_block_start, right_neighbor) };
-        #[cfg(feature = "condition")]
+        if !right_neighbor.data_start()?.is_null()
+            && (right_neighbor.data_start()? as usize >= self.end_of_page as usize
+                || !code_block::is_free(right_neighbor.data_start()?))
+        {
+            right_neighbor.set_data_start(core::ptr::null_mut());
+        }
+        unsafe { self.merge_free_space(&mut left_neighbor, alloc_data, &mut right_neighbor)? };
+        #[cfg(feature = "consistency-checks")]
         {
             unsafe {
                 assert!(
-                    (left_neighbor.is_null()
-                        && self.bucket_list.is_in_list(code_block_start).0
+                    (left_neighbor.data_start()?.is_null()
+                        && self.bucket_list.is_in_list(alloc_data)?.0
                         && code_block::is_free(code_block_start))
-                        || (self.bucket_list.is_in_list(left_neighbor).0
-                            && code_block::is_free(left_neighbor)),
+                        // || (self.bucket_list.is_in_list(left_neighbor).0
+                            // && code_block::is_free(left_neighbor)),
                 )
             };
-            assert!(self.static_end > self.dynamic_end);
         }
-        return true;
+        self.check_integrity()?;
+        Ok(())
     }
     /// #### return
     /// a pointer to the first byte in the page
-    pub fn get_start_of_page(&self) -> *const u8 {
+    pub fn start_of_page(&self) -> *const u8 {
         self.start_of_page
     }
     /// #### return
-    /// a pointer to the first byte in the static area
-    pub fn get_static_end(&self) -> *const u8 {
-        self.static_end
-    }
-    /// #### return
     /// the dynamic end
-    pub fn get_dynamic_end(&self) -> *const u8 {
+    pub fn dynamic_end(&self) -> *const u8 {
         self.dynamic_end
     }
     /// #### return
     /// the bucket list
-    pub fn get_bucket_list(&self) -> &BucketList {
+    pub fn bucket_list(&self) -> &BucketList {
         &self.bucket_list
     }
     /// Merges up to three blocks into one Block of free Space.
@@ -265,96 +203,109 @@ impl Page {
     #[inline]
     unsafe fn merge_free_space(
         &mut self,
-        left_block: *mut u8,
-        middle_block: *mut u8,
-        right_block: *mut u8,
-    ) -> *const u8 {
-        #[cfg(feature = "condition")]
+        l_alloc: &mut AllocationData,
+        alloc_data: &mut AllocationData,
+        r_alloc: &mut AllocationData,
+    ) -> Result<(), MaraError> {
+        alloc_data.check_consistency()?;
+        #[cfg(feature = "consistency-checks")]
         {
-            assert!(!code_block::is_free(middle_block));
-            assert!(right_block.is_null() || self.bucket_list.is_in_list(right_block).0);
-            assert!(left_block.is_null() || self.bucket_list.is_in_list(left_block).0);
+            assert!(r_alloc.data_start()?.is_null() || self.bucket_list.is_in_list(r_alloc)?.0);
+            assert!(l_alloc.data_start()?.is_null() || self.bucket_list.is_in_list(l_alloc)?.0);
         }
-        if left_block.is_null() {
-            if !right_block.is_null() {
-                self.bucket_list.delete_from_list(right_block);
-                self.merge_with_right(middle_block, right_block);
+        if l_alloc.data_start()?.is_null() {
+            if !r_alloc.data_start()?.is_null() {
+                self.bucket_list.delete_from_list(r_alloc)?;
+                self.merge_with_right(alloc_data, r_alloc)?;
             }
-            code_block::set_free(middle_block, true);
-            copy_code_block_to_end(middle_block, code_block::get_block_size(middle_block));
-            self.bucket_list.add_to_list(middle_block);
-            #[cfg(feature = "condition")]
+            code_block::set_free(alloc_data.data_start()?, true);
+            alloc_data.set_code_block_size(code_block::get_block_size(alloc_data.data_start()?));
+            copy_code_block_to_end(alloc_data)?;
+            self.bucket_list.add_to_list(alloc_data)?;
+            alloc_data.check_consistency()?;
+            #[cfg(feature = "consistency-checks")]
             {
-                assert!(code_block::is_free(middle_block));
-                assert!(self.bucket_list.is_in_list(middle_block).0);
+                assert!(self.bucket_list.is_in_list(alloc_data)?.0);
             }
-            return middle_block;
         } else {
-            if !right_block.is_null() {
-                self.bucket_list.delete_from_list(right_block);
-                self.merge_with_right(middle_block, right_block);
+            if !r_alloc.data_start()?.is_null() {
+                self.bucket_list.delete_from_list(r_alloc)?;
+                self.merge_with_right(alloc_data, r_alloc)?;
             }
-            self.bucket_list.delete_from_list(left_block);
+            self.bucket_list.delete_from_list(l_alloc)?;
 
-            self.merge_with_left(left_block, middle_block);
-            code_block::set_free(left_block, true);
-            copy_code_block_to_end(left_block, code_block::get_block_size(left_block));
-            self.bucket_list.add_to_list(left_block);
-            #[cfg(feature = "condition")]
+            self.merge_with_left(l_alloc.data_start()?, alloc_data)?;
+            code_block::set_free(l_alloc.data_start()?, true);
+            l_alloc.set_code_block_size(code_block::get_block_size(l_alloc.data_start()?));
+            copy_code_block_to_end(l_alloc)?;
+            self.bucket_list.add_to_list(l_alloc)?;
+            alloc_data.check_consistency()?;
+            #[cfg(feature = "consistency-checks")]
             {
-                assert!(code_block::is_free(left_block));
-                assert!(self.bucket_list.is_in_list(left_block).0);
+                assert!(self.bucket_list.is_in_list(l_alloc)?.0);
             }
-            left_block
         }
+        Ok(())
     }
     /// Merges both blocks to one. The types of Blocks are ignored.
     #[inline]
-    unsafe fn merge_with_left(&self, left_block: *mut u8, middle_block: *const u8) {
-        #[cfg(feature = "condition")]
+    unsafe fn merge_with_left(
+        &self,
+        left_block: *mut u8,
+        alloc_data: &mut AllocationData,
+    ) -> Result<(), MaraError> {
+        #[cfg(feature = "consistency-checks")]
         {
             assert!(code_block::is_free(left_block));
         }
-        let left_end = left_block;
-        let right_end = get_right_most_end(middle_block);
+        alloc_data.set_data_start(left_block);
+        //let right_end = get_right_most_end(middle_block);
         let (code_block_size, _) = code_block::get_code_block_for_internal_size(
-            left_end,
-            right_end as usize - left_end as usize + 1,
+            left_block,
+            alloc_data.data_size()? as usize + 1,
             true,
         );
-        copy_code_block_to_end(left_end, code_block_size);
-        #[cfg(feature = "condition")]
+        alloc_data.set_code_block_size(code_block_size);
+        copy_code_block_to_end(alloc_data)?;
+        #[cfg(feature = "consistency-checks")]
         {
-            assert!(code_block::is_free(left_end));
+            assert!(code_block::is_free(left_block));
             assert!(
-                code_block::read_from_left(left_end)
-                    == right_end as usize - left_end as usize - 2 * code_block_size + 1
+                code_block::read_from_left(left_block)
+                    == alloc_data.data_end()? as usize - left_block as usize - 2 * code_block_size
+                        + 1
             );
         }
+        Ok(())
     }
     //// Merges both blocks to one. The types of Blocks are ignored.
     #[inline]
-    unsafe fn merge_with_right(&self, middle_block: *const u8, right_block: *const u8) {
-        #[cfg(feature = "condition")]
+    unsafe fn merge_with_right(
+        &self,
+        alloc_data: &mut AllocationData,
+        r_alloc: &mut AllocationData,
+    ) -> Result<(), MaraError> {
+        #[cfg(feature = "consistency-checks")]
         {
-            assert!(code_block::is_free(right_block));
+            assert!(code_block::is_free(r_alloc.data_start()?));
         }
-        let left_end = middle_block as *mut u8;
-        let right_end = get_right_most_end(right_block);
+        alloc_data.set_data_end(r_alloc.data_end()?);
         let (code_block_size, _) = code_block::get_code_block_for_internal_size(
-            left_end,
-            right_end as usize - left_end as usize + 1,
+            alloc_data.data_start()?,
+            alloc_data.data_size()? as usize + 1,
             true,
         );
-        copy_code_block_to_end(left_end, code_block_size);
-        #[cfg(feature = "condition")]
+        alloc_data.set_space_size(code_block_size);
+        copy_code_block_to_end(alloc_data)?;
+        #[cfg(feature = "consistency-checks")]
         {
-            assert!(code_block::is_free(middle_block));
+            assert!(code_block::is_free(alloc_data.data_start()?));
             assert!(
-                code_block::read_from_left(left_end)
-                    == right_end as usize - left_end as usize - 2 * code_block_size + 1
+                code_block::read_from_left(alloc_data.data_start()?)
+                    == alloc_data.data_size()? - 2 * code_block_size + 1
             );
         }
+        Ok(())
     }
     /// Takes free space und cut the specified amount from space, starting at the left end. The new block has the adapted
     /// code blocks with the new size.
@@ -363,40 +314,44 @@ impl Page {
     /// #### bytesToCutOf
     /// amount of bytes to cut off from the left
     /// #### return
-    /// null if the resulting block would be smaller than the smallest addressable block. A pointer to the
-    /// resulting block otherwise
+    /// false if the resulting block would be smaller than the smallest addressable block. True otherwise
     #[inline]
-    fn cut_left_from_free_space(&self, mut free_space: *mut u8, bytes_to_cut_of: usize) -> *mut u8 {
-        #[cfg(feature = "condition")]
+    fn cut_left_from_free_space(
+        &self,
+        alloc_data: &mut AllocationData,
+        bytes_to_cut_of: usize,
+    ) -> Result<bool, MaraError> {
+        #[cfg(feature = "consistency-checks")]
         {
             assert!(
-                free_space >= self.start_of_page as *mut u8
-                    && free_space < self.static_end as *mut u8
+                alloc_data.data_start()? >= self.start_of_page as *mut u8
+                    && alloc_data.data_start()? < self.end_of_page as *mut u8
             );
-            assert!(get_size(free_space) >= bytes_to_cut_of);
+            assert!(alloc_data.data_size()? >= bytes_to_cut_of);
         }
-        if (get_size(free_space) as usize - bytes_to_cut_of) < SMALLEST_POSSIBLE_FREE_SPACE {
-            #[cfg(feature = "condition")]
+        if (alloc_data.data_size()? as usize - bytes_to_cut_of) < SMALLEST_POSSIBLE_FREE_SPACE {
+            #[cfg(feature = "consistency-checks")]
             {}
-            return core::ptr::null_mut();
+            Ok(false)
         } else {
-            free_space = unsafe {
-                push_beginning_right(free_space, free_space.offset(bytes_to_cut_of as isize))
+            unsafe {
+                push_beginning_right(
+                    alloc_data,
+                    alloc_data.data_start()?.offset(bytes_to_cut_of as isize),
+                )?
             };
-            #[cfg(feature = "condition")]
+            #[cfg(feature = "consistency-checks")]
             {
                 unsafe {
                     assert!(
-                        get_next(free_space, self.start_of_page).is_null()
-                            || (get_next(free_space, self.start_of_page)
-                                >= self.start_of_page as *mut u8
-                                && get_next(free_space, self.start_of_page)
-                                    < self.static_end as *mut u8),
+                        get_next(alloc_data)?.is_null()
+                            || (get_next(alloc_data)? >= self.start_of_page as *mut u8
+                                && get_next(alloc_data)? < self.end_of_page as *mut u8),
                     )
                 };
-                assert!(get_size(free_space) >= 6);
+                assert!(alloc_data.data_size()? >= 6);
             }
-            return free_space;
+            Ok(true)
         }
     }
     /// Takes free space und cut the specified amount from space, starting at the right end. The new block has the adapted
@@ -406,48 +361,45 @@ impl Page {
     /// #### bytesToCutOf
     /// amount of bytes to cut off from the left
     /// #### return
-    /// null if the resulting block would be smaller than the smallest addressable block. A pointer to the
-    /// resulting block otherwise
+    /// false if the resulting block would be smaller than the smallest addressable
+    /// block. True resulting block otherwise
     #[inline]
-    fn cut_right_from_free_space(&self, free_space: *mut u8, bytes_to_cut_of: usize) -> *mut u8 {
-        #[cfg(feature = "condition")]
+    fn cut_right_from_free_space(
+        &self,
+        alloc_data: &mut AllocationData,
+        bytes_to_cut_of: usize,
+    ) -> Result<bool, MaraError> {
+        #[cfg(feature = "consistency-checks")]
         {
-            assert!(get_size(free_space) >= bytes_to_cut_of); //there must be enough space in the freespace
+            assert!(alloc_data.data_size()? >= bytes_to_cut_of); //there must be enough space in the freespace
             assert!(
-                free_space >= self.start_of_page as *mut u8
-                    && free_space < self.static_end as *mut u8
+                alloc_data.data_start()? >= self.start_of_page as *mut u8
+                    && alloc_data.data_start()? < self.end_of_page as *mut u8
             );
             //the freespace must be in the page
         }
-        if (get_size(free_space) - bytes_to_cut_of) < SMALLEST_POSSIBLE_FREE_SPACE {
-            #[cfg(feature = "condition")]
+        if (alloc_data.data_size()? - bytes_to_cut_of) < SMALLEST_POSSIBLE_FREE_SPACE {
+            #[cfg(feature = "consistency-checks")]
             {
                 //see if clause
             }
-            return core::ptr::null_mut();
+            Ok(false)
         } else {
-            unsafe {
-                push_end_left(
-                    free_space,
-                    get_right_most_end(free_space).offset(-(bytes_to_cut_of as isize)),
-                )
-            };
-            #[cfg(feature = "condition")]
+            unsafe { push_end_left(alloc_data, alloc_data.data_end()?.sub(bytes_to_cut_of)) };
+            #[cfg(feature = "consistency-checks")]
             {
                 unsafe {
                     //the next pointer must either be the invalid pointer or must point into the page
                     assert!(
-                        get_next(free_space, self.start_of_page).is_null()
-                            || (get_next(free_space, self.start_of_page)
-                                >= self.start_of_page as *mut u8
-                                && get_next(free_space, self.start_of_page)
-                                    < self.static_end as *mut u8),
+                        get_next(alloc_data)?.is_null()
+                            || (get_next(alloc_data)? >= self.start_of_page as *mut u8
+                                && get_next(alloc_data)? < self.end_of_page as *mut u8),
                     )
                 };
-                assert!(free_space >= self.start_of_page as *mut u8); //freespace must still be in the page
-                assert!(get_right_most_end(free_space) < self.static_end); //freespace may not go into the static area
+                assert!(alloc_data.data_start()? >= self.start_of_page as *mut u8); //freespace must still be in the page
+                assert!(alloc_data.data_end()? < self.end_of_page as *mut u8); //freespace may not go into the static area
             }
-            free_space
+            Ok(true)
         }
     }
     /// generates the first bucket entry
@@ -455,17 +407,60 @@ impl Page {
     /// the first bucket entry
     #[inline]
     unsafe fn generate_first_bucket_entry(
-        start_of_page: *mut u8,
-        end_of_page: *const u8,
-    ) -> *mut u8 {
-        let free_space = start_of_page;
+        alloc_data: &mut AllocationData,
+    ) -> Result<(), MaraError> {
         let (code_block_size, _) = code_block::get_code_block_for_internal_size(
-            start_of_page,
-            end_of_page as usize - start_of_page as usize,
+            alloc_data.data_start()?,
+            alloc_data.data_size()?,
             true,
         );
-        copy_code_block_to_end(free_space, code_block_size);
-        set_next(free_space, core::ptr::null(), start_of_page);
-        return free_space;
+        alloc_data.set_code_block_size(code_block_size);
+        copy_code_block_to_end(alloc_data)?;
+        set_next(alloc_data, core::ptr::null())?;
+        Ok(())
+    }
+
+    fn page_size(&self) -> usize {
+        self.end_of_page as usize - self.start_of_page as usize
+    }
+
+    fn check_integrity(&self) -> Result<(), MaraError> {
+        #[cfg(feature = "consistency-checks")]
+        {
+            if self.start_of_page as usize > self.end_of_page as usize {
+                dbg!(self.start_of_page);
+                dbg!(self.end_of_page);
+                return Err(MaraError::InconsistentPage);
+            }
+            if self.end_of_page as usize > self.dynamic_end as usize {
+                dbg!(self.start_of_page);
+                dbg!(self.dynamic_end);
+                return Err(MaraError::PageOverflow);
+            }
+        }
+        Ok(())
+    }
+
+    fn check_alloc(&self, alloc_data: &AllocationData) -> Result<(), MaraError> {
+        #[cfg(feature = "consistency-checks")]
+        {
+            unsafe {
+                if alloc_data.data_start()? as usize >= self.start_of_page as usize
+                    && alloc_data.space()? as usize > self.start_of_page as usize
+                    && alloc_data.data_end()? as usize <= self.end_of_page as usize
+                    && (alloc_data.space()?.add(alloc_data.space_size()?) as usize)
+                        < self.end_of_page as usize
+                {
+                    dbg!(self.start_of_page);
+                    dbg!(self.end_of_page);
+                    dbg!(alloc_data.data_start()?);
+                    dbg!(alloc_data.space()?);
+                    dbg!(alloc_data.space()?.add(alloc_data.space_size()?));
+                    dbg!(alloc_data.data_end()?);
+                    return Err(MaraError::InconsistentAllocationData);
+                }
+            }
+        }
+        Ok(())
     }
 }

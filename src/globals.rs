@@ -52,7 +52,7 @@ fn log2_32(x: u32) -> usize {
 /// log is not defined in core so we must define it our selfs
 /// https://stackoverflow.com/questions/11376288/fast-computing-of-log2-for-64-bit-integers#11398748
 pub fn log2(x: usize) -> usize {
-    #[cfg(feature = "condition")]
+    #[cfg(feature = "consistency-checks")]
     {
         assert!(x > 0)
     }
