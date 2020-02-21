@@ -12,6 +12,8 @@
                 "args": [
                     "test",
                     "--no-run",
+                    "--",
+                    "--nocapture",
                     // "--lib"
                 ], // Cargo command line to build the debug target
                 // "args": ["build", "--bin=foo"] is another possibility

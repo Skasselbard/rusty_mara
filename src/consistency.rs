@@ -7,7 +7,6 @@ use rand::distributions::{
     uniform::{UniformFloat, UniformSampler},
     Uniform,
 };
-use rand::prelude::*;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
@@ -34,13 +33,9 @@ pub struct Test {
     amount_new_variables: usize,
     /// dynamic allocation propability.
     /// If no dynamic block is allocated a static block is allocted instead
-    p_dynamic: f64,
-    /// probability to free a dynamic block
     p_free: f64,
     /// minimal allocation size per block
     min_size: usize,
-    /// currently ignored
-    average_size: usize,
     /// maximal allocation size per block
     max_size: usize,
     /// after an iteration all pages are deleted
@@ -56,9 +51,6 @@ pub struct TestBuilder {
     fill_strategy: FillRequestedMemory,
 
     amount_new_variables: usize,
-    /// dynamic allocation propability.
-    /// If no dynamic block is allocated a static block is allocted instead
-    p_dynamic: f64,
     /// probability to free a dynamic block
     p_free: f64,
     /// minimal allocation size per block
@@ -83,7 +75,6 @@ impl TestBuilder {
             fill_strategy: FillRequestedMemory::NoFill,
             max_iterations: 1,
             amount_new_variables: 50000,
-            p_dynamic: 0.2,
             p_free: 0.5,
             min_size: 4,
             average_size: 16,
@@ -103,10 +94,8 @@ impl TestBuilder {
             fill_strategy: self.fill_strategy,
             max_iterations: self.max_iterations,
             amount_new_variables: self.amount_new_variables,
-            p_dynamic: self.p_dynamic,
             p_free: self.p_free,
             min_size: self.min_size,
-            average_size: self.average_size,
             max_size: self.max_size,
             seed: self.seed,
             mara,
@@ -120,10 +109,6 @@ impl TestBuilder {
 
     pub fn amount_new_variables(mut self, amount: usize) -> Self {
         self.amount_new_variables = amount;
-        self
-    }
-    pub fn p_dynamic(mut self, propability: f64) -> Self {
-        self.p_dynamic = propability;
         self
     }
     pub fn p_free(mut self, propability: f64) -> Self {
@@ -193,16 +178,9 @@ impl Test {
                 }
 
                 let address: *mut usize;
-                let rnd_val: f64 = probability_distribution.sample(&mut rng);
-                if rnd_val <= self.p_dynamic {
-                    // request address to dynamic memory and save the address for later deletion
-                    address = self.mara.dynamic_new(var_size) as *mut usize;
-                    dynamic_pointers.push(address);
-                } else {
-                    // request address to static memory
-                    // address = self.mara.static_new(var_size) as *mut usize;
-                    continue;
-                }
+                // request address to dynamic memory and save the address for later deletion
+                address = self.mara.dynamic_new(var_size) as *mut usize;
+                dynamic_pointers.push(address);
                 if self.fill_strategy != FillRequestedMemory::NoFill {
                     // write address to address
                     Self::write_into_block(address, var_size, self.fill_strategy);
@@ -215,10 +193,9 @@ impl Test {
                     let to_delete =
                         *dynamic_pointers.get(deleted_index).expect("item not found") as *mut usize;
                     unsafe {
-                        let (size, _) =
-                            code_block::read_from_right(to_delete.offset(-1) as *mut u8);
+                        let size = code_block::read_from_left(to_delete as *mut u8);
                         for i in 0..size {
-                            *(to_delete.offset(i as isize)) = 0b00000000;
+                            *(to_delete.add(i)) = 0b00000000;
                         }
                     }
 
@@ -229,7 +206,7 @@ impl Test {
 
             let elapsed = begin.elapsed();
 
-            self.check_pages()?;
+            self.check_pages().unwrap();
             println!(
                 "{}\t{}\t{}\t\t\t{}",
                 self.seed,
@@ -278,8 +255,7 @@ impl Test {
             loop {
                 let bucket_list = (*page).bucket_list();
                 let mut block_pointer = (*page).start_of_page();
-                let dynamic_end = (*page).dynamic_end();
-                while block_pointer < dynamic_end {
+                while block_pointer < (*page).end_of_page() {
                     let memory_size = code_block::read_from_left(block_pointer);
                     let code_block_size = code_block::get_block_size(block_pointer);
                     if !code_block::is_free(block_pointer) {
@@ -303,15 +279,17 @@ impl Test {
                     } else {
                         let bl_index = BucketList::lookup_bucket(memory_size);
                         let mut current_element = AllocationData::new();
-                        current_element.set_data_start(bucket_list.get_from_bucket_list(bl_index));
+                        current_element
+                            .set_data_start(bucket_list.get_from_bucket_list(bl_index) as *mut u8);
                         current_element.set_page(page as *mut Page);
-                        while current_element.data_start()? != block_pointer as *mut u8 {
-                            if current_element.data_start()?.is_null() {
+                        while current_element.data_start() != block_pointer as *mut u8 {
+                            if current_element.data_start().is_null() {
                                 break;
                             }
-                            current_element.set_data_start(get_next(&current_element)?)
+                            current_element
+                                .set_data_start(get_next(&current_element).unwrap() as *mut u8)
                         }
-                        if current_element.data_start()?.is_null() {
+                        if current_element.data_start().is_null() {
                             self.free_space_not_in_bucket_list =
                                 self.free_space_not_in_bucket_list + 1;
                         }

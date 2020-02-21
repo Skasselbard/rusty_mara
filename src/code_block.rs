@@ -1,3 +1,4 @@
+use crate::globals::*;
 ///
 /// The code block which encodes the size of the memory block dynamically
 ///
@@ -35,9 +36,13 @@
 ///                  .
 ///                  .
 ////
+use crate::AllocationData;
+use core::mem::size_of;
 
 const FREE_BIT: u8 = 0b0100_0000;
 const SIZE_BIT: u8 = 0b1000_0000;
+const FIRST_DATA_MASK: usize = 0b0011_1111;
+const CONTINUE_DATA_MASK: usize = 0b0111_1111;
 
 /// Reads the CodeBlock from the left
 /// #### first_byte
@@ -50,28 +55,28 @@ pub unsafe fn read_from_left(first_byte: *const u8) -> usize {
     let mut size: usize;
     if *first_byte & SIZE_BIT > 0 {
         //block is single byte
-        size = (*first_byte & 63) as usize;
+        size = *first_byte as usize & FIRST_DATA_MASK;
         #[cfg(feature = "consistency-checks")]
         {
-            debug_assert!(size <= 63 && size >= 4); //dynamic blocks are at least 4 bytes big#
+            debug_assert!(size <= FIRST_DATA_MASK && size >= size_of::<NextPointerType>()); //dynamic blocks are at least 4 bytes big#
             assert!(*first_byte & SIZE_BIT > 0); //first bit must be set
         }
     } else {
         //block is more than one byte
         let mut current_byte = first_byte.offset(1);
-        size = (*first_byte & 63) as usize;
+        size = *first_byte as usize & FIRST_DATA_MASK;
         size <<= 7;
         while *current_byte & SIZE_BIT > 0 {
-            size |= (*current_byte & 127) as usize; //insert the last 7 bits of the current byte at the end of size
+            size |= *current_byte as usize & CONTINUE_DATA_MASK; //insert the last 7 bits of the current byte at the end of size
             current_byte = current_byte.offset(1);
             size <<= 7; //shift the old byte 7  bits to the left to make space for the next 7 bits
         }
-        size |= (*current_byte & 127) as usize; //insert the last 7 bits of the current byte at the end of size
-    }
-    #[cfg(feature = "consistency-checks")]
-    {
-        assert!(size >= 4); //dynamic blocks are at least 4 bytes big
-        assert!(*first_byte & SIZE_BIT == 0); //first bit of the first byte must not be set
+        size |= *current_byte as usize & CONTINUE_DATA_MASK; //insert the last 7 bits of the current byte at the end of size
+        #[cfg(feature = "consistency-checks")]
+        {
+            assert!(size >= size_of::<NextPointerType>()); //dynamic blocks are at least 4 bytes big
+            assert!(*first_byte & SIZE_BIT == 0); //first bit of the first byte must not be set
+        }
     }
     size
 }
@@ -80,82 +85,73 @@ pub unsafe fn read_from_left(first_byte: *const u8) -> usize {
 /// the rightmost byte from the CodeBlock
 /// #### return
 /// the size of the memory block and the left most byte of the block
-pub unsafe fn read_from_right(first_byte: *const u8) -> (usize, *const u8) {
+pub unsafe fn read_from_right(first_byte: *const u8) -> (usize, *mut u8) {
     #[cfg(feature = "consistency-checks")]
     {}
     let mut out_left_byte = first_byte;
     let mut size: usize;
     if *first_byte & SIZE_BIT > 0 {
         //block is single byte
-        size = (*first_byte & 63) as usize;
+        size = *first_byte as usize & FIRST_DATA_MASK;
         #[cfg(feature = "consistency-checks")]
         {
-            assert!(size <= 63 && size >= 4); //dynamic blocks are at least 4 bytes big#
+            assert!(size <= FIRST_DATA_MASK && size >= size_of::<NextPointerType>()); //dynamic blocks are at least 4 bytes big#
             assert!(*first_byte & SIZE_BIT > 0); //first bit must be set
         }
     } else {
         //block is more than one byte
         let mut current_byte = first_byte.offset(-1);
-        size = (*first_byte & 127) as usize;
+        size = *first_byte as usize & CONTINUE_DATA_MASK;
         let mut m = 1;
         while *current_byte & SIZE_BIT > 0 {
-            let mut tmp = (*current_byte & 127) as usize; //stuff the 7 bits into a temporary size_t
+            let mut tmp = *current_byte as usize & CONTINUE_DATA_MASK; //stuff the 7 bits into a temporary size_t
             tmp <<= 7 * m; //shift them to the appropriate position
             size |= tmp as usize; //merge size and tmp
             current_byte = current_byte.offset(-1);
             m = m + 1;
         }
-        let mut tmp = (*current_byte & 63) as usize; //stuff the 7 bits into a temporary size_t
+        let mut tmp = *current_byte as usize & FIRST_DATA_MASK; //stuff the 7 bits into a temporary size_t
         tmp <<= 7 * m; //shift them to the appropriate position
         size |= tmp; //merge size and tmp
         out_left_byte = current_byte;
         #[cfg(feature = "consistency-checks")]
         {
-            assert!(size >= 4); //dynamic blocks are at least 4 bytes big
+            assert!(size >= size_of::<NextPointerType>()); //dynamic blocks are at least 4 bytes big
             assert!(*out_left_byte & SIZE_BIT == 0); //first bit must not be set
             assert!(out_left_byte < first_byte); //first byte must be befor the last byte
             assert!(*first_byte & SIZE_BIT == 0); //first bit of the last byte must not be set
         }
     }
-    (size, out_left_byte)
+    (size, out_left_byte as *mut u8)
 }
 
-/// Build a CodeBlock for a payload with the given size (from the right side of the left codeBlock to the left side
-/// of the right code block). Useful to allocate the memory for a new occupied space.
-/// #### left_start_of_block
-/// the beginning of the codeBlock starting from the left (return and this pointer should be the same)
-/// #### memory_block_size
-/// size of the memory block which should be represented by the CodeBlock
-/// #### return_array_size
-/// size of the array returned by this function
-/// #### return
-/// an array of bytes, containing the codeBlock representing the memory block size.
-/// The size of the array is stored in the second to last parameter. It should correspond to the left_start_of_block parameter
-pub unsafe fn get_code_block_for_payload_size(
-    left_start_of_block: *mut u8,
-    memory_block_size: usize,
-    return_array_size: *mut usize,
-    isfree: bool,
-) -> *const u8 {
-    if memory_block_size <= 63 {
-        *return_array_size = 1;
-        *left_start_of_block = (memory_block_size | SIZE_BIT as usize) as u8;
-        set_free(left_start_of_block, isfree);
-        return left_start_of_block;
+/// Build a CodeBlock for a payload with the given size (from the right side of the
+/// left codeBlock to the left side of the right code block). Useful to allocate the
+/// memory for a new occupied space.
+/// Updates the code block size from ``alloc_data``.
+pub unsafe fn generate_code_block_for_payload_size(alloc_data: &mut AllocationData, isfree: bool) {
+    let mut code_block_size;
+    if alloc_data.space_size() <= FIRST_DATA_MASK {
+        code_block_size = 1;
+        *alloc_data.data_start() = (alloc_data.space_size() | SIZE_BIT as usize) as u8;
+        set_free(alloc_data.data_start(), isfree);
+    } else {
+        //calculate how many bytes are needed
+        let mut t: usize = alloc_data.space_size() >> 6;
+        code_block_size = 2;
+        while t > CONTINUE_DATA_MASK {
+            t >>= 7;
+            code_block_size += 1;
+        }
+        generate_code_block_for_payload_size2(
+            alloc_data.data_start(),
+            alloc_data.space_size(),
+            isfree,
+            code_block_size,
+        );
     }
-    //calculate how many bytes are needed
-    let mut t: usize = memory_block_size >> 6;
-    *return_array_size = 2;
-    while t > 127 {
-        t >>= 7;
-        *return_array_size = *return_array_size + 1;
-    }
-    get_code_block_for_payload_size2(
-        left_start_of_block,
-        memory_block_size,
-        isfree,
-        *return_array_size,
-    )
+    alloc_data.set_code_block_size(code_block_size);
+    alloc_data.set_space(alloc_data.data_start().add(alloc_data.code_block_size()));
 }
 
 /// Build a CodeBlock for space that is managed internally (from the left side of the left codeBlock to the right side
@@ -165,40 +161,39 @@ pub unsafe fn get_code_block_for_payload_size(
 /// #### internallyNeededSize
 /// size of the internally occupied space including management information
 /// #### return
-/// size of the array and an array of bytes, containing the codeBlock representing the size between the both codeBlocks.
-pub unsafe fn get_code_block_for_internal_size(
+/// size of code block and an array of bytes, containing the codeBlock representing the size between the both codeBlocks.
+pub unsafe fn generate_code_block_for_internal_size(
     left_start_of_block: *mut u8,
     internally_needed_size: usize,
     isfree: bool,
-) -> (usize, *mut u8) {
+) -> usize {
     #[cfg(feature = "consistency-checks")]
     {
-        assert!(internally_needed_size >= 4); //trivial.
+        assert!(internally_needed_size >= size_of::<NextPointerType>()); //trivial.
     }
-    let mut return_array_size = 1;
-    while get_needed_code_block_size(internally_needed_size - 2 * return_array_size)
-        > return_array_size
+    let mut code_block_size = 1;
+    while get_needed_code_block_size(internally_needed_size - 2 * code_block_size) > code_block_size
     {
-        return_array_size = return_array_size + 1;
+        code_block_size = code_block_size + 1;
     }
-    let return_byte = get_code_block_for_payload_size2(
+    generate_code_block_for_payload_size2(
         left_start_of_block,
-        internally_needed_size - 2 * return_array_size,
+        internally_needed_size - 2 * code_block_size,
         isfree,
-        return_array_size,
+        code_block_size,
     );
     #[cfg(feature = "consistency-checks")]
     {
-        assert!(return_array_size == get_block_size(left_start_of_block));
+        assert!(code_block_size == get_block_size(left_start_of_block));
         assert!(match isfree {
             true => *left_start_of_block & FREE_BIT > 0,
             false => *left_start_of_block & FREE_BIT == 0,
         });
         assert!(
-            read_from_left(left_start_of_block) >= internally_needed_size - 2 * return_array_size
+            read_from_left(left_start_of_block) >= internally_needed_size - 2 * code_block_size
         );
     }
-    return (return_array_size, return_byte);
+    code_block_size
 }
 
 /// reads if the given CodeBlock describes a free or used block.
@@ -289,15 +284,15 @@ pub fn get_needed_code_block_size(mut size_to_encode: usize) -> usize {
 /// size of the CodeBlock in Bytes  
 /// #### return
 /// an array of bytes, containing the codeBlock representing the memory block size.  
-unsafe fn get_code_block_for_payload_size2(
+unsafe fn generate_code_block_for_payload_size2(
     left_start_of_block: *mut u8,
     mut memory_block_size: usize,
     isfree: bool,
     code_block_size: usize,
-) -> *mut u8 {
+) {
     #[cfg(feature = "consistency-checks")]
     {
-        assert!(memory_block_size >= 4);
+        assert!(memory_block_size >= size_of::<NextPointerType>());
         assert!(code_block_size > 0);
     }
     if code_block_size == 1 {
@@ -309,7 +304,6 @@ unsafe fn get_code_block_for_payload_size2(
             assert!(is_free(left_start_of_block) == isfree);
             assert!(read_from_left(left_start_of_block) == memory_block_size);
         }
-        return left_start_of_block;
     }
 
     //write the bytes right to left
@@ -318,30 +312,25 @@ unsafe fn get_code_block_for_payload_size2(
     for _ in 0..code_block_size {
         if last {
             //current is the rightmost byte
-            *current = (memory_block_size & 127) as u8;
+            *current = (memory_block_size & CONTINUE_DATA_MASK) as u8;
             memory_block_size >>= 7;
             last = false;
             current = current.offset(-1);
         } else if current == left_start_of_block {
             //current is the leftmost byte
-            *current = (memory_block_size & 63) as u8;
+            *current = (memory_block_size & FIRST_DATA_MASK) as u8;
             set_free(left_start_of_block, isfree);
             #[cfg(feature = "consistency-checks")]
             {
                 assert!(*left_start_of_block & SIZE_BIT == 0);
                 assert!(is_free(left_start_of_block) == isfree);
             }
-            return left_start_of_block;
+            // this was the last byte
+            break;
         } else {
-            *current = ((memory_block_size & 127) | SIZE_BIT as usize) as u8;
+            *current = ((memory_block_size & CONTINUE_DATA_MASK) | SIZE_BIT as usize) as u8;
             memory_block_size >>= 7;
             current = current.offset(-1);
         }
     }
-    // should not be reached
-    #[cfg(feature = "consistency-checks")]
-    {
-        assert!(false);
-    }
-    return left_start_of_block;
 }

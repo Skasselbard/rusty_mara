@@ -1,8 +1,8 @@
 use crate::code_block;
 use crate::free_space::*;
 use crate::globals::*;
+use crate::AllocationData;
 use crate::Page;
-use crate::{AllocationData, MaraError};
 
 pub struct BucketList {
     /// The array with the information of the dynamic free sections
@@ -10,26 +10,11 @@ pub struct BucketList {
     /// The space pointed to at the given index is the first one of the size class.
     ///
     /// Each index represent another size class. Increasing indices represent increasing size classes.
-    bucket_list: [*mut u8; BUCKET_LIST_SIZE],
+    bucket_list: [*mut NextPointerType; BUCKET_LIST_SIZE],
 
     page: *mut Page,
 }
 impl BucketList {
-    /// null if bucket is empty, the last element otherwise
-    fn get_last_in_bucket(&self, size: usize) -> Result<AllocationData, MaraError> {
-        let mut current_element = AllocationData::new();
-        current_element.set_page(self.page);
-        current_element.set_data_start(self.bucket_list[size]);
-        if current_element.data_start()? == core::ptr::null_mut() {
-            return Ok(current_element);
-        }
-        unsafe {
-            while get_next(&current_element)? != core::ptr::null_mut() {
-                current_element.set_data_start(get_next(&current_element)?);
-            }
-        }
-        Ok(current_element)
-    }
     /// #### index
     /// start index to search. The returned index will greater or equal to this index.
     /// #### return
@@ -64,7 +49,7 @@ impl BucketList {
         &self,
         minimum_size: usize,
         index: usize,
-    ) -> Result<AllocationData, MaraError> {
+    ) -> AllocationData {
         #[cfg(feature = "consistency-checks")]
         {
             assert!(minimum_size > 0);
@@ -72,20 +57,14 @@ impl BucketList {
         }
         let mut return_alloc = AllocationData::new();
         return_alloc.set_page(self.page);
-        return_alloc.set_data_start(self.bucket_list[index]);
-        while !return_alloc.data_start()?.is_null()
-            && code_block::read_from_left(return_alloc.data_start()?) < minimum_size
-        {
-            return_alloc.set_data_start(get_next(&return_alloc)?)
+        return_alloc.set_space(self.bucket_list[index] as *mut u8);
+        return_alloc.set_space_size(code_block::read_from_right(return_alloc.space().sub(1)).0);
+        while !return_alloc.space().is_null() && return_alloc.space_size() < minimum_size {
+            return_alloc.set_space(get_next(&return_alloc).unwrap() as *mut u8);
+            return_alloc.set_space_size(code_block::read_from_right(return_alloc.space().sub(1)).0);
         }
-        #[cfg(feature = "consistency-checks")]
-        {
-            assert!(
-                return_alloc.data_start()?.is_null()
-                    || code_block::read_from_left(return_alloc.data_start()?) >= minimum_size
-            );
-        }
-        Ok(return_alloc)
+        self.check_found(&return_alloc, minimum_size);
+        return_alloc
     }
 
     /// Initializes a new bucket list.
@@ -102,85 +81,64 @@ impl BucketList {
     /// #### return
     /// null if there was no fitting space found. A pointer to the first free space in the list Otherwise.
     #[inline]
-    pub unsafe fn get_free_space(&self, alloc_data: &mut AllocationData) -> Result<(), MaraError> {
+    pub unsafe fn get_free_space(&self, alloc_data: &mut AllocationData) {
         #[cfg(feature = "consistency-checks")]
         {
-            assert!(alloc_data.space_size()? > 0);
+            assert!(alloc_data.space_size() > 0);
         }
-        let mut bucket_index = Self::lookup_bucket(alloc_data.space_size()?);
+        let mut bucket_index = Self::lookup_bucket(alloc_data.space_size());
+        let mut found;
         loop {
             bucket_index = self.find_non_empty_bucket(bucket_index);
-            alloc_data.set_data_start(
-                self.find_fitting_space_in_bucket(alloc_data.space_size()?, bucket_index)?
-                    .data_start()?,
-            );
-            if !alloc_data.data_start()?.is_null() {
+            found = self.find_fitting_space_in_bucket(alloc_data.space_size(), bucket_index);
+            alloc_data.set_space(found.space());
+            if !alloc_data.space().is_null() {
                 bucket_index = bucket_index + 1
             }
-            if !(alloc_data.data_start()?.is_null() && bucket_index < (BUCKET_LIST_SIZE - 1)) {
+            if !(alloc_data.space().is_null() && bucket_index < (BUCKET_LIST_SIZE - 1)) {
                 break;
             }
         }
         if bucket_index == BUCKET_LIST_SIZE - 1 {
-            alloc_data.set_data_start(
-                self.find_fitting_space_in_bucket(alloc_data.space_size()?, BUCKET_LIST_SIZE - 1)?
-                    .data_start()?,
-            );
+            found =
+                self.find_fitting_space_in_bucket(alloc_data.space_size(), BUCKET_LIST_SIZE - 1);
+            alloc_data.set_space(found.space());
         }
-        #[cfg(feature = "consistency-checks")]
-        {
-            if !alloc_data.data_start()?.is_null() {
-                assert!(
-                    code_block::read_from_left(alloc_data.data_start()?)
-                        >= alloc_data.space_size()?
-                );
-                assert!(self.is_in_list(alloc_data)?.0);
-            }
-        }
-        Ok(())
+        alloc_data.set_space_size(found.space_size());
+        self.check_found(alloc_data, alloc_data.space_size());
     }
 
-    pub unsafe fn delete_from_list(
-        &mut self,
-        alloc_data: &mut AllocationData,
-    ) -> Result<(), MaraError> {
-        #[cfg(feature = "consistency-checks")]
-        {}
-        let (in_list, predecessor) = self.is_in_list(alloc_data)?;
+    pub unsafe fn delete_from_list(&mut self, alloc_data: &mut AllocationData) {
+        let (in_list, predecessor) = self.is_in_list(alloc_data);
         if in_list {
-            if predecessor.data_start()?.is_null() {
-                self.bucket_list[Self::lookup_bucket(alloc_data.data_size()?)] =
-                    get_next(alloc_data)?;
+            if predecessor.space().is_null() {
+                self.bucket_list[Self::lookup_bucket(alloc_data.space_size())] =
+                    get_next(alloc_data).unwrap();
             } else {
-                set_next(alloc_data, get_next(alloc_data)?)?;
+                set_next(alloc_data, get_next(alloc_data).unwrap());
             }
-            #[cfg(feature = "consistency-checks")]
-            {
-                assert!(!self.is_in_list(alloc_data)?.0);
-            }
-            Ok(())
+            self.check_in_list(alloc_data, false);
         } else {
-            Err(MaraError::AllocationNotFound)
+            panic!("Allocation not found");
         }
     }
-    pub unsafe fn add_to_list(&mut self, alloc_data: &mut AllocationData) -> Result<(), MaraError> {
-        #[cfg(feature = "consistency-checks")]
-        {
-            assert!(alloc_data.data_start()? >= (*self.page).start_of_page() as *mut u8);
-            assert!(!self.is_in_list(alloc_data)?.0);
-        }
-        let size = code_block::read_from_left(alloc_data.data_start()?);
+    pub unsafe fn add_to_list(&mut self, alloc_data: &mut AllocationData) {
+        (*self.page).check_alloc_start(alloc_data);
+        (*self.page).check_alloc_end(alloc_data);
+        self.check_in_list(alloc_data, false);
+        let size = code_block::read_from_left(alloc_data.data_start());
         let successor = self.bucket_list[Self::lookup_bucket(size)];
-        set_next(alloc_data, successor)?;
-        self.bucket_list[Self::lookup_bucket(size)] = alloc_data.data_start()?;
+        set_next(alloc_data, successor);
+        self.bucket_list[Self::lookup_bucket(size)] = alloc_data.space() as *mut NextPointerType;
         #[cfg(feature = "consistency-checks")]
         {
-            assert!(self.is_in_list(alloc_data)?.0);
+            let mut alloc_post = alloc_data.clone();
+            alloc_post.set_code_block_size(code_block::read_from_left(alloc_post.data_start()));
+            self.check_in_list(&mut alloc_post, true);
         }
-        Ok(())
     }
 
-    pub fn get_from_bucket_list(&self, index: usize) -> *mut u8 {
+    pub fn get_from_bucket_list(&self, index: usize) -> *mut NextPointerType {
         self.bucket_list[index]
     }
 
@@ -207,47 +165,116 @@ impl BucketList {
     /// the Space to search for
     /// #### return
     /// is in list and the predecessor, if one is found(Output)
-    pub unsafe fn is_in_list(
-        &self,
-        alloc_data: &AllocationData,
-    ) -> Result<(bool, AllocationData), MaraError> {
-        #[cfg(feature = "consistency-checks")]
-        {
-            assert!(code_block::is_free(alloc_data.data_start()?));
-        }
+    pub unsafe fn is_in_list(&self, alloc_data: &AllocationData) -> (bool, AllocationData) {
+        alloc_data.check_left_free(true);
         let mut predecessor = core::ptr::null_mut();
         let mut current_element = AllocationData::new();
-        current_element.set_page(alloc_data.page()?);
-        current_element.set_data_start(
-            self.bucket_list
-                [Self::lookup_bucket(code_block::read_from_left(alloc_data.data_start()?))],
-        );
-        if current_element.data_start()?.is_null() {
-            return Ok((false, current_element));
+        current_element.set_page(alloc_data.page());
+        current_element
+            .set_space(self.bucket_list[Self::lookup_bucket(alloc_data.space_size())] as *mut u8);
+        if current_element.space().is_null() {
+            return (false, current_element);
         }
-        while !get_next(&current_element)?.is_null()
-            && current_element.data_start()? != alloc_data.data_start()?
+        // current_element
+        //     .set_data_start(code_block::read_from_right(alloc_data.space().unwrap().sub(1)).1);
+        // current_element.set_code_block_size(code_block::get_block_size(
+        // current_element.data_start().unwrap(),
+        // ));
+        while !get_next(&current_element).unwrap().is_null()
+            && current_element.space() != alloc_data.space()
         {
-            predecessor = current_element.data_start()?;
-            current_element.set_data_start(get_next(&current_element)?);
+            predecessor = current_element.space();
+            current_element.set_space(get_next(&current_element).unwrap() as *mut u8);
+            // current_element
+            //     .set_data_start(code_block::read_from_right(alloc_data.space().unwrap().sub(1)).1);
+            // current_element.set_code_block_size(code_block::get_block_size(
+            //     current_element.data_start().unwrap(),
+            // ));
         }
-        if current_element.data_start()? != alloc_data.data_start()? {
-            current_element.set_data_start(core::ptr::null_mut())
+        if current_element.space() != alloc_data.space() {
+            current_element.set_space(core::ptr::null_mut())
         }
         #[cfg(feature = "consistency-checks")]
         {
             assert!(
-                current_element.data_start()?.is_null()
-                    || alloc_data.data_start()?.is_null()
+                current_element.space().is_null()
+                    || alloc_data.space().is_null()
                     || predecessor.is_null() // || get_next(predecessor, self.start_of_page) == free_space,
             );
             assert!(
-                current_element.data_start()?.is_null()
-                    || current_element.data_start()? == alloc_data.data_start()?
+                current_element.space().is_null() || current_element.space() == alloc_data.space()
             );
         }
-        let in_list = !current_element.data_start()?.is_null();
-        current_element.set_data_start(predecessor);
-        Ok((in_list, current_element))
+        let in_list = !current_element.space().is_null();
+        current_element.set_space(predecessor);
+        (in_list, current_element)
+    }
+
+    /////////////////////////////////
+    // Checks
+
+    pub fn check_init(&self) {
+        #[cfg(feature = "consistency-checks")]
+        {
+            // bucket list is empty
+            for i in 0..(BUCKET_LIST_SIZE - 1) {
+                if !(self.get_from_bucket_list(i).is_null()) {
+                    dbg!(i);
+                    dbg!(self.get_from_bucket_list(i));
+                    unsafe { dbg!(*self.get_from_bucket_list(i)) };
+                    panic!("bucket list not nulled")
+                }
+            }
+            // The free space plus code blocks are as large as the page
+            unsafe {
+                let space = self.get_from_bucket_list(BUCKET_LIST_SIZE - 1) as *mut u8;
+                let (memory_size, block) = code_block::read_from_right(space.sub(1));
+                let block_size = code_block::get_block_size(block);
+                if !(memory_size == (*self.page).page_size() - 2 * block_size) {
+                    dbg!(space);
+                    dbg!(block_size);
+                    dbg!(memory_size);
+                    dbg!((*self.page).page_size() - 2 * block_size);
+                    panic!("space in bucket list is larger then the page")
+                }
+            }
+        }
+    }
+    pub fn check_found(&self, alloc_data: &AllocationData, minimum_size: usize) {
+        #[cfg(feature = "consistency-checks")]
+        {
+            // no space found
+            if alloc_data.space().is_null() {
+                return;
+            }
+            // check space size
+            unsafe {
+                let (memory_size, _) = code_block::read_from_right(alloc_data.space().sub(1));
+                if memory_size < minimum_size {
+                    dbg!(memory_size);
+                    dbg!(minimum_size);
+                    panic!("space in bucket list is smaller as expected")
+                }
+                if alloc_data.space_size() != memory_size {
+                    dbg!(alloc_data.space_size());
+                    dbg!(memory_size);
+                    panic!("cached space size does not match calculated space size")
+                }
+            }
+        }
+    }
+    pub fn check_in_list(&self, alloc_data: &AllocationData, expected: bool) {
+        #[cfg(feature = "consistency-checks")]
+        {
+            unsafe {
+                if self.is_in_list(alloc_data).0 != expected {
+                    panic!(
+                        "data is in list: {}\nexpected: {}",
+                        self.is_in_list(alloc_data).0,
+                        expected
+                    )
+                }
+            }
+        }
     }
 }

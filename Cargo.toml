@@ -11,9 +11,6 @@ edition = "2018"
 rand = {version="0.7.3", features = ["small_rng"]}
 
 [features]
-default = ["bit32", "consistency-checks"]
-bit32 = []
-bit16 = []
-bit8 = []
+default = ["consistency-checks"]
 consistency-checks = []
-statistic = []
+# statistic = []

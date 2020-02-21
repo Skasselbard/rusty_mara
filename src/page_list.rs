@@ -1,3 +1,5 @@
+use crate::code_block;
+use crate::globals::*;
 use crate::page::Page;
 use crate::AllocationData;
 use crate::MaraError;
@@ -28,11 +30,18 @@ impl PageList {
         data_size: usize,
         list_memory_size: usize,
     ) -> Result<Self, MaraError> {
-        // push the page memory left to fit in the page objects
-        let data = unsafe { data.offset((list_memory_size * size_of::<*mut Page>()) as isize) };
-        // initialize the first page
+        let max_code_block_size = code_block::get_needed_code_block_size(page_size);
+        if page_size > NextPointerType::max_value() as usize - 2 * max_code_block_size {
+            panic!(
+                "Pages greater than {} bytes are not supported",
+                NextPointerType::max_value() as usize - 2 * max_code_block_size
+            );
+        }
+        // store the location to the first page
         let first_page = data as *mut Page;
-        unsafe { (*first_page).init(data, page_size)? };
+        // after that push the data start right to reserve page objects space
+        let data = unsafe { data.offset((list_memory_size * size_of::<*mut Page>()) as isize) };
+        unsafe { (*first_page).init(data, page_size).unwrap() };
         unsafe { (*first_page).set_next_page(first_page) };
         Ok(Self {
             page_size,
@@ -43,34 +52,22 @@ impl PageList {
             data_size: data_size - list_memory_size,
         })
     }
-    /// sets the page size
-    /// #### size_in_byte
-    /// the page size
-    pub fn set_page_size(&mut self, size_in_byte: usize) {
-        self.page_size = size_in_byte
-    }
-
-    pub fn get_page_size(&self) -> usize {
-        self.page_size
-    }
-
     pub fn get_first_page(&self) -> *const Page {
         self.first_page
     }
-
     /// #### size_in_byte
     /// size of the block
     /// #### return
     /// a pointer to the block
     pub fn dynamic_new(&mut self, alloc_data: &mut AllocationData) -> Result<(), MaraError> {
-        alloc_data.check_space_size(1, self.page_size)?;
+        alloc_data.check_space_size(1, self.page_size);
         let current_page = self.first_page;
         loop {
-            unsafe { (*current_page).get_dynamic_block(alloc_data)? };
-            if alloc_data.data_start()?.is_null() {
+            unsafe { (*current_page).get_dynamic_block(alloc_data) };
+            if alloc_data.space_is_init() {
                 break;
             }
-            self.iterate_page(current_page)?;
+            self.iterate_page(current_page).unwrap();
         }
         #[cfg(feature = "statistic")]
         {
@@ -80,12 +77,7 @@ impl PageList {
                 start_of_space,
             );
         }
-        #[cfg(feature = "consistency-checks")]
-        {
-            unsafe {
-                assert!(alloc_data.data_start()? >= (*current_page).start_of_page() as *mut u8);
-            }
-        }
+        unsafe { (*current_page).check_alloc_start(alloc_data) };
         self.first_page = current_page;
         Ok(())
     }
@@ -97,24 +89,10 @@ impl PageList {
         alloc_data.set_space(address);
         let current_page = unsafe { &mut *(self.first_page) };
         while !current_page.block_is_in_space(address) {
-            self.iterate_page(current_page)?;
+            self.iterate_page(current_page).unwrap();
         }
-        current_page.delete_block(&mut alloc_data)?;
+        current_page.delete_block(&mut alloc_data).unwrap();
         Ok(())
-    }
-    /// #### return
-    /// how many pages are in the cyclic list
-    pub fn get_page_count(&self) -> usize {
-        let mut count = 0;
-        let mut page = unsafe { &mut *self.first_page };
-        loop {
-            count = count + 1;
-            page = unsafe { &mut *page.get_next_page() };
-            if page as *mut Page == self.first_page {
-                break;
-            }
-        }
-        count
     }
     ///Inserts a new page into cyclic list after the specified page.
     ///@param current_page the page after which a new page will be inserted
@@ -144,7 +122,7 @@ impl PageList {
     fn iterate_page(&mut self, current_page: *mut Page) -> Result<*const Page, MaraError> {
         let mut current_page = unsafe { &mut *current_page };
         if current_page.get_next_page() == self.first_page {
-            self.add_page_to_list(&mut current_page)?;
+            self.add_page_to_list(&mut current_page).unwrap();
             Ok(current_page.get_next_page())
         } else {
             Ok(current_page.get_next_page())

@@ -19,14 +19,13 @@ use core::cell::UnsafeCell;
 use core::mem::{size_of, transmute};
 use page::Page;
 use page_list::PageList;
-use rand;
 
 #[derive(Debug, Copy, Eq, PartialEq, Clone)]
 pub enum MaraError {
     OutOfMemory,
     OutOfPages,
     NotEnoughMemory,
-    UninitializedAllocationData,
+    UninitializedAllocationData(allocation_data::AllocDataType),
     NoFittingSpace,
     AllocationNotFound,
     CodeBlockOverflow,
@@ -40,6 +39,7 @@ pub enum MaraError {
     InconsistentPage,
     InconsistentCodeBlocks,
     InconsistentAllocationData,
+    InconsistentBucketList,
 }
 
 pub struct Mara {
@@ -80,7 +80,7 @@ impl Mara {
     /// #### return
     /// a pointer to the first byte of the block you want to use. After this operation the block will stay allocated
     /// until complete program termination.
-    pub fn static_new(&self, size_in_byte: usize) -> *mut u8 {
+    pub fn static_new(&self, _size_in_byte: usize) -> *mut u8 {
         unimplemented!();
         //self.page_list().static_new(size_in_byte)
     }
@@ -96,7 +96,7 @@ impl Mara {
         self.page_list()
             .dynamic_new(&mut allocation_data)
             .expect("Allocation Error");
-        allocation_data.space().unwrap()
+        allocation_data.space()
     }
 
     /**

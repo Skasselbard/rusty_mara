@@ -1,3 +1,5 @@
+use core::mem::size_of;
+
 pub const LAST_LINEAR_4_SCALING: usize = 32;
 pub const LAST_LINEAR_16_SCALING: usize = 128;
 pub const LARGEST_BUCKET_SIZE: usize = 1024;
@@ -9,7 +11,10 @@ pub const BUCKET_LIST_SIZE: usize = LAST_LINEAR_4_SCALING / 4
     + 1;
 
 pub const MAX_PAGE_SIZE: usize = 0x1000_0000_0000; //2^32 byte ~ 4Gb
-pub const SMALLEST_POSSIBLE_FREE_SPACE: usize = 6; //6 byte
+pub const SMALLEST_POSSIBLE_FREE_SPACE: usize = size_of::<NextPointerType>();
+
+pub type NextPointerType = u32;
+pub const ERROR_NEXT_POINTER: NextPointerType = NextPointerType::max_value(); // just ones
 
 fn log2_64(x: u64) -> usize {
     if x == 0 {
