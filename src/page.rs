@@ -3,7 +3,7 @@ use crate::code_block;
 use crate::free_space::*;
 use crate::globals::*;
 use crate::space::*;
-use crate::{AllocationData, MaraError};
+use crate::AllocationData;
 use core::mem::size_of;
 use core::ops::*;
 
@@ -19,7 +19,7 @@ pub struct Page {
 }
 
 impl Page {
-    pub fn init(&mut self, page_memory: *mut u8, page_size: usize) -> Result<(), MaraError> {
+    pub fn init(&mut self, page_memory: *mut u8, page_size: usize) {
         unsafe {
             let this = self as *mut Page;
             self.next_page = core::ptr::null_mut();
@@ -31,7 +31,7 @@ impl Page {
             alloc_data.set_data_start(page_memory);
             alloc_data.set_data_end(page_memory.add(page_size).sub(1));
             alloc_data.set_page(self);
-            Self::generate_first_bucket_entry(&mut alloc_data).unwrap();
+            Self::generate_first_bucket_entry(&mut alloc_data);
             alloc_data.set_code_block_size(code_block::get_block_size(alloc_data.data_start()));
             alloc_data.set_space(alloc_data.data_start().add(alloc_data.code_block_size()));
             alloc_data.set_space_size(page_size - 2 * alloc_data.code_block_size());
@@ -44,15 +44,12 @@ impl Page {
             alloc_data.check_space();
             alloc_data.check_data_size(page_size, page_size);
         }
-        Ok(())
     }
     /// generates the first bucket entry
     /// #### return
     /// the first bucket entry
     #[inline]
-    unsafe fn generate_first_bucket_entry(
-        alloc_data: &mut AllocationData,
-    ) -> Result<(), MaraError> {
+    unsafe fn generate_first_bucket_entry(alloc_data: &mut AllocationData) {
         let code_block_size = code_block::generate_code_block_for_internal_size(
             alloc_data.data_start(),
             alloc_data.calculate_data_size(),
@@ -61,7 +58,6 @@ impl Page {
         alloc_data.set_code_block_size(code_block_size);
         copy_code_block_to_end(alloc_data);
         set_next(alloc_data, core::ptr::null_mut());
-        Ok(())
     }
     #[inline]
     pub fn page_size(&self) -> usize {
@@ -89,7 +85,7 @@ impl Page {
                     code_block::get_needed_code_block_size(free_alloc.space_size()),
                 ));
                 // next has to be cached
-                free_alloc.set_next_pointer(get_next(&free_alloc).unwrap());
+                free_alloc.set_next_pointer(get_next(&free_alloc));
                 // cache the end of the free space for later
                 free_alloc.set_data_end(
                     free_alloc
@@ -140,7 +136,7 @@ impl Page {
     /// the first byte of the block
     /// #### return
     /// true if successful, false otherwise
-    pub fn delete_block(&mut self, alloc_data: &mut AllocationData) -> Result<(), MaraError> {
+    pub fn delete_block(&mut self, alloc_data: &mut AllocationData) {
         alloc_data.set_page(self);
         self.check_integrity();
         let (memory_block_size, code_block_start) =
@@ -165,10 +161,10 @@ impl Page {
             code_block_start.add(2 * code_block_size + memory_block_size) as *mut u8
         });
         if right_neighbor.data_start() as usize > self.end_of_page as usize {
-            return Err(MaraError::PageOverflow);
+            panic!("Mara: Page Overflow");
         }
         if self.start_of_page < code_block_start {
-            left_neighbor.set_data_start(get_left_neighbor(alloc_data).unwrap() as *mut u8);
+            left_neighbor.set_data_start(get_left_neighbor(alloc_data) as *mut u8);
         }
         if !left_neighbor.data_start().is_null() && !code_block::is_free(left_neighbor.data_start())
         {
@@ -180,10 +176,7 @@ impl Page {
         {
             right_neighbor.set_data_start(core::ptr::null_mut());
         }
-        unsafe {
-            self.merge_free_space(&mut left_neighbor, alloc_data, &mut right_neighbor)
-                .unwrap()
-        };
+        unsafe { self.merge_free_space(&mut left_neighbor, alloc_data, &mut right_neighbor) };
         #[cfg(feature = "consistency-checks")]
         {
             unsafe {
@@ -197,7 +190,6 @@ impl Page {
             };
         }
         self.check_integrity();
-        Ok(())
     }
     /// #### return
     /// a pointer to the first byte in the page
@@ -233,7 +225,7 @@ impl Page {
         l_alloc: &mut AllocationData,
         alloc_data: &mut AllocationData,
         r_alloc: &mut AllocationData,
-    ) -> Result<(), MaraError> {
+    ) {
         alloc_data.check_consistency();
         #[cfg(feature = "consistency-checks")]
         {
@@ -261,8 +253,7 @@ impl Page {
             }
             self.bucket_list.delete_from_list(l_alloc);
 
-            self.merge_with_left(l_alloc.data_start(), alloc_data)
-                .unwrap();
+            self.merge_with_left(l_alloc.data_start(), alloc_data);
             code_block::set_free(l_alloc.data_start(), true);
             l_alloc.set_code_block_size(code_block::get_block_size(l_alloc.data_start()));
             copy_code_block_to_end(l_alloc);
@@ -273,15 +264,10 @@ impl Page {
                 assert!(self.bucket_list.is_in_list(l_alloc).0);
             }
         }
-        Ok(())
     }
     /// Merges both blocks to one. The types of Blocks are ignored.
     #[inline]
-    unsafe fn merge_with_left(
-        &self,
-        left_block: *mut u8,
-        alloc_data: &mut AllocationData,
-    ) -> Result<(), MaraError> {
+    unsafe fn merge_with_left(&self, left_block: *mut u8, alloc_data: &mut AllocationData) {
         #[cfg(feature = "consistency-checks")]
         {
             assert!(code_block::is_free(left_block));
@@ -304,7 +290,6 @@ impl Page {
                         + 1
             );
         }
-        Ok(())
     }
     //// Merges both blocks to one. The types of Blocks are ignored.
     #[inline]

@@ -60,7 +60,7 @@ impl BucketList {
         return_alloc.set_space(self.bucket_list[index] as *mut u8);
         return_alloc.set_space_size(code_block::read_from_right(return_alloc.space().sub(1)).0);
         while !return_alloc.space().is_null() && return_alloc.space_size() < minimum_size {
-            return_alloc.set_space(get_next(&return_alloc).unwrap() as *mut u8);
+            return_alloc.set_space(get_next(&return_alloc) as *mut u8);
             return_alloc.set_space_size(code_block::read_from_right(return_alloc.space().sub(1)).0);
         }
         self.check_found(&return_alloc, minimum_size);
@@ -113,9 +113,9 @@ impl BucketList {
         if in_list {
             if predecessor.space().is_null() {
                 self.bucket_list[Self::lookup_bucket(alloc_data.space_size())] =
-                    get_next(alloc_data).unwrap();
+                    get_next(alloc_data);
             } else {
-                set_next(alloc_data, get_next(alloc_data).unwrap());
+                set_next(alloc_data, get_next(alloc_data));
             }
             self.check_in_list(alloc_data, false);
         } else {
@@ -176,19 +176,18 @@ impl BucketList {
             return (false, current_element);
         }
         // current_element
-        //     .set_data_start(code_block::read_from_right(alloc_data.space().unwrap().sub(1)).1);
+        //     .set_data_start(code_block::read_from_right(alloc_data.space().sub(1)).1);
         // current_element.set_code_block_size(code_block::get_block_size(
-        // current_element.data_start().unwrap(),
+        // current_element.data_start(),
         // ));
-        while !get_next(&current_element).unwrap().is_null()
-            && current_element.space() != alloc_data.space()
+        while !get_next(&current_element).is_null() && current_element.space() != alloc_data.space()
         {
             predecessor = current_element.space();
-            current_element.set_space(get_next(&current_element).unwrap() as *mut u8);
+            current_element.set_space(get_next(&current_element) as *mut u8);
             // current_element
-            //     .set_data_start(code_block::read_from_right(alloc_data.space().unwrap().sub(1)).1);
+            //     .set_data_start(code_block::read_from_right(alloc_data.space().sub(1)).1);
             // current_element.set_code_block_size(code_block::get_block_size(
-            //     current_element.data_start().unwrap(),
+            //     current_element.data_start(),
             // ));
         }
         if current_element.space() != alloc_data.space() {

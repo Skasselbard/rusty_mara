@@ -19,7 +19,7 @@
 /// ------------------------------------------------------------------
 /// ```
 use crate::code_block;
-use crate::{AllocationData, MaraError};
+use crate::AllocationData;
 
 /// Copies a code block from the beginning of space to the end of space
 /// #### start_of_block
@@ -55,8 +55,8 @@ pub unsafe fn copy_code_block_to_end(alloc_data: &mut AllocationData) {
 /// #### return
 /// pointer to the left neighbor
 #[inline]
-pub fn get_left_neighbor(alloc_data: &AllocationData) -> Result<*const u8, MaraError> {
+pub fn get_left_neighbor(alloc_data: &AllocationData) -> *const u8 {
     let memory_size = unsafe { code_block::read_from_left(alloc_data.data_start()) };
     let code_block_size = code_block::get_needed_code_block_size(memory_size);
-    Ok(((alloc_data.data_start() as usize - memory_size) - code_block_size) as *const u8)
+    ((alloc_data.data_start() as usize - memory_size) - code_block_size) as *const u8
 }

@@ -3,21 +3,22 @@
 use crate::code_block;
 use crate::globals::*;
 use crate::space::*;
-use crate::{AllocationData, MaraError};
+use crate::AllocationData;
 
 /// #### return
 /// a pointer to the next FreeSpace in the bucket. The left next pointer will be taken as reference.
 /// Next pointer are an offset of the page start
 /// nullptr if the offset == 0
 #[inline]
-pub unsafe fn get_next(alloc_data: &AllocationData) -> Result<*mut NextPointerType, MaraError> {
+pub unsafe fn get_next(alloc_data: &AllocationData) -> *mut NextPointerType {
     let left_next = generate_next_pointer_position(alloc_data);
     if *left_next == ERROR_NEXT_POINTER {
-        return Ok(core::ptr::null_mut());
+        core::ptr::null_mut()
+    } else {
+        (alloc_data
+            .calculate_start_of_page()
+            .add(*left_next as usize)) as *mut NextPointerType
     }
-    Ok((alloc_data
-        .calculate_start_of_page()
-        .add(*left_next as usize)) as *mut NextPointerType)
 }
 
 /// Adapt the next pointer in the data structure. The next pointer is adjacent to the

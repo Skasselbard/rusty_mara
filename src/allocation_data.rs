@@ -105,7 +105,7 @@ impl AllocationData {
     pub fn calculate_data_size(&self) -> usize {
         if let Some(data_start) = self.data_start {
             if let Some(data_end) = self.data_end {
-                return data_end as usize - data_start as usize +1;
+                return data_end as usize - data_start as usize + 1;
             }
             unsafe {
                 let code_block_size = match self.code_block_size {
@@ -252,8 +252,8 @@ impl AllocationData {
         {
             // let left_size
             // let right_size
-            // let left_next = free_space::set_left_next(self).unwrap();
-            // let right_next = free_space::set_right_next(self).unwrap();
+            // let left_next = free_space::set_left_next(self);
+            // let right_next = free_space::set_right_next(self);
 
             // check data size
             if self.data_start() as usize >= self.data_end() as usize {
@@ -295,7 +295,7 @@ impl AllocationData {
         #[cfg(feature = "consistency-checks")]
         {
             unsafe {
-                let next_target = free_space::get_next(self).unwrap();
+                let next_target = free_space::get_next(self);
                 let start_of_page = (*self.page()).start_of_page() as *mut NextPointerType;
                 let end_of_page = (*self.page()).end_of_page() as *mut NextPointerType;
                 if !next_target.is_null()

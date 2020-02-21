@@ -2,7 +2,7 @@ use crate::bucket_list::BucketList;
 use crate::code_block;
 use crate::free_space::*;
 use crate::page::Page;
-use crate::{AllocationData, Mara, MaraError};
+use crate::{AllocationData, Mara};
 use rand::distributions::{
     uniform::{UniformFloat, UniformSampler},
     Uniform,
@@ -87,7 +87,7 @@ impl TestBuilder {
     }
 
     pub fn build(self) -> Test {
-        let mara = Mara::new(self.page_size, self.memory, self.memory_size).unwrap();
+        let mara = Mara::new(self.page_size, self.memory, self.memory_size);
         Test {
             free_space_not_in_bucket_list: 0,
             corrupted_blocks: 0,
@@ -147,7 +147,7 @@ impl Test {
     /// The time for each run is measured. After a run, a consistency check is performed.
     /// After completion, prints information about the test in the following order:
     /// type seed time dynamicMemoryPeak dynamicBlocksPeak staticMemoryPeak staticBlockPeak corrupted_blocks freeSpaceNotInBL
-    pub fn run(&mut self) -> Result<(), MaraError> {
+    pub fn run(&mut self) {
         let begin;
         let mut dynamic_pointers: Vec<*mut usize>;
         if cfg!(no_std) {
@@ -206,7 +206,7 @@ impl Test {
 
             let elapsed = begin.elapsed();
 
-            self.check_pages().unwrap();
+            self.check_pages();
             println!(
                 "{}\t{}\t{}\t\t\t{}",
                 self.seed,
@@ -215,7 +215,6 @@ impl Test {
                 self.free_space_not_in_bucket_list
             );
         }
-        Ok(())
     }
 
     /**
@@ -246,7 +245,7 @@ impl Test {
     /// If the block is not free, checks it for consistency by checking if the content corresponds to what write_into_block
     /// had written into it after requesting it.
     /// Errors are counted using the variables "free_space_not_in_bucket_list" and "corrupted_blocks".
-    fn check_pages(&mut self) -> Result<(), MaraError> {
+    fn check_pages(&mut self) {
         unsafe {
             self.free_space_not_in_bucket_list = 0;
             self.corrupted_blocks = 0;
@@ -286,8 +285,7 @@ impl Test {
                             if current_element.data_start().is_null() {
                                 break;
                             }
-                            current_element
-                                .set_data_start(get_next(&current_element).unwrap() as *mut u8)
+                            current_element.set_data_start(get_next(&current_element) as *mut u8)
                         }
                         if current_element.data_start().is_null() {
                             self.free_space_not_in_bucket_list =
@@ -302,7 +300,6 @@ impl Test {
                     break;
                 }
             }
-            Ok(())
         }
     }
 }

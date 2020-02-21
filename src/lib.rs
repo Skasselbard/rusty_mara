@@ -20,28 +20,6 @@ use core::mem::{size_of, transmute};
 use page::Page;
 use page_list::PageList;
 
-#[derive(Debug, Copy, Eq, PartialEq, Clone)]
-pub enum MaraError {
-    OutOfMemory,
-    OutOfPages,
-    NotEnoughMemory,
-    UninitializedAllocationData(allocation_data::AllocDataType),
-    NoFittingSpace,
-    AllocationNotFound,
-    CodeBlockOverflow,
-
-    SpaceSizeToSmall,
-    SpaceSizeToBig,
-    SpaceIsNull,
-    AllocSizeToSmall,
-    AllocSizeToBig,
-    PageOverflow,
-    InconsistentPage,
-    InconsistentCodeBlocks,
-    InconsistentAllocationData,
-    InconsistentBucketList,
-}
-
 pub struct Mara {
     page_list: UnsafeCell<PageList>,
 }
@@ -51,7 +29,10 @@ impl Mara {
     /// start of data array
     /// #### data_size
     /// length of the data array in bytes
-    pub fn new(page_size: usize, data: *mut u8, data_size: usize) -> Result<Self, MaraError> {
+    pub fn new(page_size: usize, data: *mut u8, data_size: usize) -> Self {
+        if page_size > globals::MAX_PAGE_SIZE {
+            panic!("Mara: Max page size is {} bytes", globals::MAX_PAGE_SIZE);
+        }
         // compute how many pages fit in the memory and
         // consider the size that is needed to store the page objects
         let mut max_pages = data_size / page_size;
@@ -61,10 +42,10 @@ impl Mara {
             page_object_data_size = page_object_data_size - 1;
         }
         if max_pages <= 0 {
-            Err(MaraError::NotEnoughMemory)
+            panic!("Mara: Cannot fit page in given memory")
         } else {
-            let page_list = UnsafeCell::new(PageList::new(page_size, data, data_size, max_pages)?);
-            Ok(Self { page_list })
+            let page_list = UnsafeCell::new(PageList::new(page_size, data, data_size, max_pages));
+            Self { page_list }
         }
     }
 
@@ -93,9 +74,7 @@ impl Mara {
     pub fn dynamic_new(&self, size_in_byte: usize) -> *mut u8 {
         let mut allocation_data = AllocationData::new();
         allocation_data.set_space_size(size_in_byte);
-        self.page_list()
-            .dynamic_new(&mut allocation_data)
-            .expect("Allocation Error");
+        self.page_list().dynamic_new(&mut allocation_data);
         allocation_data.space()
     }
 
@@ -105,9 +84,7 @@ impl Mara {
      * @return true if the operation was successful, false elsewhen
      */
     pub fn dynamic_delete(&self, address: *mut u8) {
-        self.page_list()
-            .dynamic_delete(address)
-            .expect("deallocation failed")
+        self.page_list().dynamic_delete(address)
     }
 }
 
