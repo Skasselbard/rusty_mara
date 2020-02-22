@@ -1,4 +1,3 @@
-use crate::globals::*;
 ///
 /// The code block which encodes the size of the memory block dynamically
 ///
@@ -36,6 +35,7 @@ use crate::globals::*;
 ///                  .
 ///                  .
 ////
+use crate::globals::*;
 use crate::AllocationData;
 use core::mem::size_of;
 
@@ -49,55 +49,44 @@ const CONTINUE_DATA_MASK: usize = 0b0111_1111;
 /// the first byte from the CodeBlock
 /// #### return
 /// the size of the memory block
-pub unsafe fn read_from_left(first_byte: *const u8) -> usize {
-    #[cfg(feature = "consistency-checks")]
-    {}
-    let mut size: usize;
-    if *first_byte & SIZE_BIT > 0 {
-        //block is single byte
-        size = *first_byte as usize & FIRST_DATA_MASK;
-        #[cfg(feature = "consistency-checks")]
-        {
-            debug_assert!(size <= FIRST_DATA_MASK && size >= size_of::<NextPointerType>()); //dynamic blocks are at least 4 bytes big#
-            assert!(*first_byte & SIZE_BIT > 0); //first bit must be set
-        }
-    } else {
-        //block is more than one byte
-        let mut current_byte = first_byte.offset(1);
-        size = *first_byte as usize & FIRST_DATA_MASK;
-        size <<= 7;
-        while *current_byte & SIZE_BIT > 0 {
+pub fn read_from_left(first_byte: *mut u8) -> usize {
+    unsafe {
+        let mut size: usize;
+        if *first_byte & SIZE_BIT > 0 {
+            //block is single byte
+            size = *first_byte as usize & FIRST_DATA_MASK;
+            check_size(size, size_of::<NextPointerType>(), FIRST_DATA_MASK);
+            check_bits(*first_byte, SIZE_BIT, true);
+        } else {
+            //block is more than one byte
+            let mut current_byte = first_byte.offset(1);
+            size = *first_byte as usize & FIRST_DATA_MASK;
+            size <<= 7;
+            while *current_byte & SIZE_BIT > 0 {
+                size |= *current_byte as usize & CONTINUE_DATA_MASK; //insert the last 7 bits of the current byte at the end of size
+                current_byte = current_byte.offset(1);
+                size <<= 7; //shift the old byte 7  bits to the left to make space for the next 7 bits
+            }
             size |= *current_byte as usize & CONTINUE_DATA_MASK; //insert the last 7 bits of the current byte at the end of size
-            current_byte = current_byte.offset(1);
-            size <<= 7; //shift the old byte 7  bits to the left to make space for the next 7 bits
+            check_size(size, size_of::<NextPointerType>(), MAX_PAGE_SIZE - 2 * size);
+            check_bits(*first_byte, SIZE_BIT, false);
         }
-        size |= *current_byte as usize & CONTINUE_DATA_MASK; //insert the last 7 bits of the current byte at the end of size
-        #[cfg(feature = "consistency-checks")]
-        {
-            assert!(size >= size_of::<NextPointerType>()); //dynamic blocks are at least 4 bytes big
-            assert!(*first_byte & SIZE_BIT == 0); //first bit of the first byte must not be set
-        }
+        size
     }
-    size
 }
 /// Reads the CodeBlock from the right
 /// #### first_byte
 /// the rightmost byte from the CodeBlock
 /// #### return
 /// the size of the memory block and the left most byte of the block
-pub unsafe fn read_from_right(first_byte: *const u8) -> (usize, *mut u8) {
-    #[cfg(feature = "consistency-checks")]
-    {}
+pub unsafe fn read_from_right(first_byte: *mut u8) -> (usize, *mut u8) {
     let mut out_left_byte = first_byte;
     let mut size: usize;
     if *first_byte & SIZE_BIT > 0 {
         //block is single byte
         size = *first_byte as usize & FIRST_DATA_MASK;
-        #[cfg(feature = "consistency-checks")]
-        {
-            assert!(size <= FIRST_DATA_MASK && size >= size_of::<NextPointerType>()); //dynamic blocks are at least 4 bytes big#
-            assert!(*first_byte & SIZE_BIT > 0); //first bit must be set
-        }
+        check_size(size, size_of::<NextPointerType>(), FIRST_DATA_MASK);
+        check_bits(*first_byte, SIZE_BIT, true);
     } else {
         //block is more than one byte
         let mut current_byte = first_byte.offset(-1);
@@ -114,13 +103,10 @@ pub unsafe fn read_from_right(first_byte: *const u8) -> (usize, *mut u8) {
         tmp <<= 7 * m; //shift them to the appropriate position
         size |= tmp; //merge size and tmp
         out_left_byte = current_byte;
-        #[cfg(feature = "consistency-checks")]
-        {
-            assert!(size >= size_of::<NextPointerType>()); //dynamic blocks are at least 4 bytes big
-            assert!(*out_left_byte & SIZE_BIT == 0); //first bit must not be set
-            assert!(out_left_byte < first_byte); //first byte must be befor the last byte
-            assert!(*first_byte & SIZE_BIT == 0); //first bit of the last byte must not be set
-        }
+        check_size(size, size_of::<NextPointerType>(), MAX_PAGE_SIZE - 2 * size);
+        check_bits(*out_left_byte, SIZE_BIT, false); //first bit must not be set
+        check_bits(*first_byte, SIZE_BIT, false); //first bit of the last byte must not be set
+        check_order(out_left_byte, first_byte);
     }
     (size, out_left_byte as *mut u8)
 }
@@ -131,13 +117,13 @@ pub unsafe fn read_from_right(first_byte: *const u8) -> (usize, *mut u8) {
 /// Updates the code block size from ``alloc_data``.
 pub unsafe fn generate_code_block_for_payload_size(alloc_data: &mut AllocationData, isfree: bool) {
     let mut code_block_size;
-    if alloc_data.space_size() <= FIRST_DATA_MASK {
+    if alloc_data.space.size() <= FIRST_DATA_MASK {
         code_block_size = 1;
-        *alloc_data.data_start() = (alloc_data.space_size() | SIZE_BIT as usize) as u8;
+        *alloc_data.data_start() = (alloc_data.space.size() | SIZE_BIT as usize) as u8;
         set_free(alloc_data.data_start(), isfree);
     } else {
         //calculate how many bytes are needed
-        let mut t: usize = alloc_data.space_size() >> 6;
+        let mut t: usize = alloc_data.space.size() >> 6;
         code_block_size = 2;
         while t > CONTINUE_DATA_MASK {
             t >>= 7;
@@ -145,13 +131,13 @@ pub unsafe fn generate_code_block_for_payload_size(alloc_data: &mut AllocationDa
         }
         generate_code_block_for_payload_size2(
             alloc_data.data_start(),
-            alloc_data.space_size(),
+            alloc_data.space.size(),
             isfree,
             code_block_size,
         );
     }
     alloc_data.set_code_block_size(code_block_size);
-    alloc_data.set_space(alloc_data.data_start().add(alloc_data.code_block_size()));
+    alloc_data.space.set_ptr(alloc_data.data_start().add(alloc_data.code_block_size()));
 }
 
 /// Build a CodeBlock for space that is managed internally (from the left side of the left codeBlock to the right side
@@ -167,10 +153,11 @@ pub unsafe fn generate_code_block_for_internal_size(
     internally_needed_size: usize,
     isfree: bool,
 ) -> usize {
-    #[cfg(feature = "consistency-checks")]
-    {
-        assert!(internally_needed_size >= size_of::<NextPointerType>()); //trivial.
-    }
+    check_size(
+        internally_needed_size,
+        size_of::<NextPointerType>(),
+        MAX_PAGE_SIZE,
+    );
     let mut code_block_size = 1;
     while get_needed_code_block_size(internally_needed_size - 2 * code_block_size) > code_block_size
     {
@@ -182,9 +169,13 @@ pub unsafe fn generate_code_block_for_internal_size(
         isfree,
         code_block_size,
     );
+    check_size(
+        code_block_size,
+        get_block_size(left_start_of_block),
+        get_block_size(left_start_of_block),
+    );
     #[cfg(feature = "consistency-checks")]
     {
-        assert!(code_block_size == get_block_size(left_start_of_block));
         assert!(match isfree {
             true => *left_start_of_block & FREE_BIT > 0,
             false => *left_start_of_block & FREE_BIT == 0,
@@ -212,8 +203,6 @@ pub fn is_free(first_byte: *const u8) -> bool {
 /// #### return
 /// the number of bytes used by this block
 pub unsafe fn get_block_size(first_byte: *const u8) -> usize {
-    #[cfg(feature = "consistency-checks")]
-    {}
     if *first_byte & SIZE_BIT > 0 {
         return 1;
     }
@@ -223,10 +212,7 @@ pub unsafe fn get_block_size(first_byte: *const u8) -> usize {
         current_byte = current_byte.offset(1);
         size = size + 1;
     }
-    #[cfg(feature = "consistency-checks")]
-    {
-        assert!(size > 1);
-    }
+    check_size(size, 1, get_needed_code_block_size(MAX_PAGE_SIZE));
     size
 }
 /// set if the CodeBlock represents a free block or a used one
@@ -241,10 +227,7 @@ pub unsafe fn set_free(first_byte: *mut u8, free: bool) {
     } else {
         *first_byte &= 191
     }
-    #[cfg(feature = "consistency-checks")]
-    {
-        assert!(is_free(first_byte) == free);
-    }
+    check_free(first_byte, free);
 }
 /// calculates how many bytes a codeBlock would need to encode a given block size
 /// #### sizeToEncode
@@ -253,10 +236,7 @@ pub unsafe fn set_free(first_byte: *mut u8, free: bool) {
 /// the size of the resulting code block
 #[inline]
 pub fn get_needed_code_block_size(mut size_to_encode: usize) -> usize {
-    #[cfg(feature = "consistency-checks")]
-    {
-        assert!(size_to_encode > 0); //trivial.
-    }
+    check_size(size_to_encode, 1, MAX_PAGE_SIZE);
     if size_to_encode < FREE_BIT as usize {
         return 1;
     }
@@ -266,10 +246,7 @@ pub fn get_needed_code_block_size(mut size_to_encode: usize) -> usize {
         size += 1;
         size_to_encode >>= 7;
     }
-    #[cfg(feature = "consistency-checks")]
-    {
-        assert!(size > 1); //trivial.
-    }
+    check_size(size, 1, MAX_PAGE_SIZE);
     return size;
 }
 
@@ -290,20 +267,26 @@ unsafe fn generate_code_block_for_payload_size2(
     isfree: bool,
     code_block_size: usize,
 ) {
-    #[cfg(feature = "consistency-checks")]
-    {
-        assert!(memory_block_size >= size_of::<NextPointerType>());
-        assert!(code_block_size > 0);
-    }
+    check_size(
+        memory_block_size,
+        size_of::<NextPointerType>(),
+        MAX_PAGE_SIZE - 2 * code_block_size,
+    );
+    check_size(
+        code_block_size,
+        1,
+        get_needed_code_block_size(MAX_PAGE_SIZE),
+    );
     if code_block_size == 1 {
         *left_start_of_block = (memory_block_size | SIZE_BIT as usize) as u8;
         set_free(left_start_of_block, isfree);
+        check_bits(*left_start_of_block, SIZE_BIT, true);
+        check_free(left_start_of_block, isfree);
         #[cfg(feature = "consistency-checks")]
         {
-            assert!(*left_start_of_block & SIZE_BIT > 0);
-            assert!(is_free(left_start_of_block) == isfree);
             assert!(read_from_left(left_start_of_block) == memory_block_size);
         }
+        return;
     }
 
     //write the bytes right to left
@@ -331,6 +314,58 @@ unsafe fn generate_code_block_for_payload_size2(
             *current = ((memory_block_size & CONTINUE_DATA_MASK) | SIZE_BIT as usize) as u8;
             memory_block_size >>= 7;
             current = current.offset(-1);
+        }
+    }
+}
+// check if the given size is inside closed range [minimum, maximum]
+fn check_size(actual: usize, minimum: usize, maximum: usize) {
+    #[cfg(feature = "consistency-checks")]
+    {
+        if maximum < actual {
+            dbg!(maximum);
+            dbg!(actual);
+            panic!("calculated size is bigger than expected");
+        }
+        if minimum > actual {
+            dbg!(minimum);
+            dbg!(actual);
+            panic!("calculated size is smaller than expected");
+        }
+    }
+}
+/// checks if all bits that are set in the mask are also set in the actual value
+/// compares the result to the expected result
+fn check_bits(actual: u8, mask: u8, expected: bool) {
+    #[cfg(feature = "consistency-checks")]
+    {
+        if (actual & mask == mask) != expected {
+            println!("actual = {:0b}", actual);
+            println!("bit    = {:0b}", mask);
+            println!("is_set = {:?}", expected);
+            panic!("bit is not set correctly");
+        }
+    }
+}
+/// checks the pointer order
+/// pointers cannot be equal
+fn check_order(lesser: *mut u8, greater: *mut u8) {
+    #[cfg(feature = "consistency-checks")]
+    {
+        if lesser >= greater {
+            dbg!(lesser);
+            dbg!(greater);
+            panic!("pointers are crossed");
+        }
+    }
+}
+// checks if the free bit in this byte is set as expected
+fn check_free(code_block_start: *mut u8, expected: bool) {
+    #[cfg(feature = "consistency-checks")]
+    {
+        if is_free(code_block_start) != expected {
+            dbg!(is_free(code_block_start));
+            dbg!(expected);
+            panic!("free bit not set as expected");
         }
     }
 }

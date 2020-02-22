@@ -1,6 +1,6 @@
 use crate::bucket_list::BucketList;
 use crate::code_block;
-use crate::free_space::*;
+use crate::globals::*;
 use crate::page::Page;
 use crate::{AllocationData, Mara};
 use rand::distributions::{
@@ -149,7 +149,7 @@ impl Test {
     /// type seed time dynamicMemoryPeak dynamicBlocksPeak staticMemoryPeak staticBlockPeak corrupted_blocks freeSpaceNotInBL
     pub fn run(&mut self) {
         let begin;
-        let mut dynamic_pointers: Vec<*mut usize>;
+        let mut dynamic_pointers: Vec<*mut u8>;
         if cfg!(no_std) {
             unimplemented!()
         } else {
@@ -177,9 +177,9 @@ impl Test {
                     }
                 }
 
-                let address: *mut usize;
+                let address;
                 // request address to dynamic memory and save the address for later deletion
-                address = self.mara.dynamic_new(var_size) as *mut usize;
+                address = self.mara.dynamic_new(var_size);
                 dynamic_pointers.push(address);
                 if self.fill_strategy != FillRequestedMemory::NoFill {
                     // write address to address
@@ -226,7 +226,7 @@ impl Test {
      * \param size the block's size
      */
 
-    fn write_into_block(address: *mut usize, size: usize, fill_option: FillRequestedMemory) {
+    fn write_into_block(address: *mut u8, size: usize, fill_option: FillRequestedMemory) {
         if fill_option != FillRequestedMemory::NoFill {
             let value_at_address = match fill_option {
                 FillRequestedMemory::NoFill => panic!("should be unreachable"),
@@ -235,7 +235,7 @@ impl Test {
                 FillRequestedMemory::AddressShortcut => address as usize,
             };
             for i in 0..size {
-                unsafe { *(address.offset(i as isize)) = value_at_address };
+                unsafe { *(address.add(i) as *mut usize) = value_at_address };
             }
         }
     }
@@ -253,8 +253,8 @@ impl Test {
             let mut page = self.mara.page_list().get_first_page();
             loop {
                 let bucket_list = (*page).bucket_list();
-                let mut block_pointer = (*page).start_of_page();
-                while block_pointer < (*page).end_of_page() {
+                let mut block_pointer = (*page).start_of_page() as *mut u8;
+                while block_pointer < (*page).end_of_page() as *mut u8 {
                     let memory_size = code_block::read_from_left(block_pointer);
                     let code_block_size = code_block::get_block_size(block_pointer);
                     if !code_block::is_free(block_pointer) {
@@ -276,18 +276,21 @@ impl Test {
                             }
                         }
                     } else {
-                        let bl_index = BucketList::lookup_bucket(memory_size);
-                        let mut current_element = AllocationData::new();
+                        let mut current_element = &mut AllocationData::new();
+                        current_element.space.set_size(memory_size);
                         current_element
-                            .set_data_start(bucket_list.get_from_bucket_list(bl_index) as *mut u8);
+                            .space
+                            .set_ptr(bucket_list.first_for_size(current_element));
                         current_element.set_page(page as *mut Page);
+                        //TODO: data start berechnen
                         while current_element.data_start() != block_pointer as *mut u8 {
                             if current_element.data_start().is_null() {
                                 break;
                             }
-                            current_element.set_data_start(get_next(&current_element) as *mut u8)
+                            let next = current_element.space.read_next((*page).start_of_page());
+                            current_element.space.set_ptr(next)
                         }
-                        if current_element.data_start().is_null() {
+                        if current_element.space.ptr().is_null() {
                             self.free_space_not_in_bucket_list =
                                 self.free_space_not_in_bucket_list + 1;
                         }

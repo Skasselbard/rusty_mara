@@ -5,7 +5,6 @@ mod allocation_data;
 mod bucket_list;
 mod code_block;
 mod consistency;
-mod free_space;
 mod globals;
 mod page;
 mod page_list;
@@ -73,9 +72,9 @@ impl Mara {
      */
     pub fn dynamic_new(&self, size_in_byte: usize) -> *mut u8 {
         let mut allocation_data = AllocationData::new();
-        allocation_data.set_space_size(size_in_byte);
+        allocation_data.space.set_size(size_in_byte);
         self.page_list().dynamic_new(&mut allocation_data);
-        allocation_data.space()
+        allocation_data.space.ptr()
     }
 
     /**

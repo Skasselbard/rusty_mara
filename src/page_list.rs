@@ -3,7 +3,6 @@ use crate::globals::*;
 use crate::page::Page;
 use crate::AllocationData;
 use core::mem::size_of;
-use core::result::Result;
 
 pub struct PageList {
     page_size: usize,
@@ -58,7 +57,7 @@ impl PageList {
         let current_page = self.first_page;
         loop {
             unsafe { (*current_page).get_dynamic_block(alloc_data) };
-            if alloc_data.space_is_init() {
+            if alloc_data.space.is_some() {
                 break;
             }
             self.iterate_page(current_page);
@@ -79,7 +78,7 @@ impl PageList {
     /// a pointer to the block
     pub fn dynamic_delete(&mut self, address: *mut u8) {
         let mut alloc_data = AllocationData::new();
-        alloc_data.set_space(address);
+        alloc_data.space.set_ptr(address);
         let current_page = unsafe { &mut *(self.first_page) };
         while !current_page.block_is_in_space(address) {
             self.iterate_page(current_page);
