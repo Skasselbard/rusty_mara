@@ -1,7 +1,6 @@
 use crate::bucket_list::BucketList;
 use crate::code_block;
 use crate::globals::*;
-use crate::space::*;
 use crate::AllocationData;
 use core::mem::size_of;
 use core::ops::*;
@@ -30,15 +29,9 @@ impl Page {
             alloc_data.set_data_start(page_memory);
             alloc_data.set_data_end(page_memory.add(page_size).sub(1));
             alloc_data.set_page(self);
-            Self::generate_first_bucket_entry(&mut alloc_data);
-            alloc_data.set_code_block_size(code_block::get_block_size(alloc_data.data_start()));
-            alloc_data
-                .space
-                .set_ptr(alloc_data.data_start().add(alloc_data.code_block_size()));
-            alloc_data
-                .space
-                .set_size(page_size - 2 * alloc_data.code_block_size());
-            self.bucket_list.insert(&mut alloc_data);
+            alloc_data.write_data_size_code_blocks(true);
+            alloc_data.space.write_next(core::ptr::null_mut());
+            self.bucket_list.insert(&mut alloc_data.space);
 
             self.check_integrity();
             self.bucket_list().check_init();
@@ -47,20 +40,6 @@ impl Page {
             alloc_data.check_space();
             alloc_data.check_data_size(page_size, page_size);
         }
-    }
-    /// generates the first bucket entry
-    /// #### return
-    /// the first bucket entry
-    #[inline]
-    unsafe fn generate_first_bucket_entry(alloc_data: &mut AllocationData) {
-        let code_block_size = code_block::generate_code_block_for_internal_size(
-            alloc_data.data_start(),
-            alloc_data.calculate_data_size(),
-            true,
-        );
-        alloc_data.set_code_block_size(code_block_size);
-        alloc_data.copy_code_block_to_end();
-        alloc_data.space.set_next(core::ptr::null_mut());
     }
     /// tries to reserve a dynamic block in this page, and returns it
     pub fn get_dynamic_block(&mut self, alloc_data: &mut AllocationData) {
@@ -77,7 +56,7 @@ impl Page {
             } else {
                 // Remove this free space from list
                 // the remaining space will be added again later
-                self.bucket_list.remove(free_alloc);
+                self.bucket_list.remove(&free_alloc.space);
                 // Calculate where the allocation starts
                 // It will be at the beginning of the found free space
                 alloc_data.set_data_start(free_alloc.space.ptr().sub(
@@ -100,7 +79,7 @@ impl Page {
                 self.split_free_space(alloc_data, free_alloc);
                 // no space remains
                 if free_alloc.space.size() != 0 {
-                    self.bucket_list.insert(free_alloc);
+                    self.bucket_list.insert(&mut free_alloc.space);
                 } else {
                     // Edge Case: If the remaining space is too small to be used again,
                     // simply return a larger block
@@ -150,7 +129,7 @@ impl Page {
     pub fn delete_block(&mut self, alloc_data: &mut AllocationData) {
         alloc_data.set_page(self);
         self.check_integrity();
-        alloc_data.read_and_cache_code_blocks();
+        alloc_data.cache_code_blocks();
         #[cfg(feature = "statistic")]
         {
             Statistic::freeDynamic(memory_block_size, first_byte);
@@ -168,9 +147,9 @@ impl Page {
             if let Some(mut left_alloc) = alloc_data.left_neighbor() {
                 if code_block::is_free(left_alloc.data_start()) {
                     alloc_data.set_data_start(left_alloc.data_start());
-                    self.bucket_list.remove(&mut left_alloc);
+                    self.bucket_list.remove(&left_alloc.space);
                     self.check_alloc_start(&left_alloc);
-                    self.bucket_list.check_in_list(&left_alloc, false);
+                    self.bucket_list.check_in_list(&left_alloc.space, false);
                 }
             }
             // merge with right if it is free space and self is not
@@ -178,16 +157,16 @@ impl Page {
             if let Some(mut right_alloc) = alloc_data.right_neighbor() {
                 if code_block::is_free(right_alloc.data_start()) {
                     alloc_data.set_data_end(right_alloc.data_end());
-                    self.bucket_list.remove(&mut right_alloc);
+                    self.bucket_list.remove(&right_alloc.space);
                     self.check_alloc_end(&right_alloc);
-                    self.bucket_list.check_in_list(&right_alloc, false);
+                    self.bucket_list.check_in_list(&right_alloc.space, false);
                 }
             }
             // write code blocks with set free flag
             // and get code block and space information for free
             alloc_data.write_data_size_code_blocks(true);
-            self.bucket_list.insert(alloc_data);
-            self.bucket_list.check_in_list(alloc_data, true);
+            self.bucket_list.insert(&mut alloc_data.space);
+            self.bucket_list.check_in_list(&alloc_data.space, true);
         }
     }
     #[inline]
@@ -253,29 +232,35 @@ impl Page {
     /// check that alloc.data_start is in page boundaries
     #[inline]
     pub fn check_alloc_start(&self, alloc_data: &AllocationData) {
-        if (alloc_data.data_start() as usize) < self.start_of_page as usize {
-            dbg!(self.start_of_page);
-            dbg!(alloc_data.data_start());
-            panic!("Allocation start is left of page start")
-        }
-        if alloc_data.data_start() as usize > self.end_of_page as usize {
-            dbg!(self.end_of_page);
-            dbg!(alloc_data.data_start());
-            panic!("Allocation start is right of page end")
+        #[cfg(feature = "consistency-checks")]
+        {
+            if (alloc_data.data_start() as usize) < self.start_of_page as usize {
+                dbg!(self.start_of_page);
+                dbg!(alloc_data.data_start());
+                panic!("Allocation start is left of page start")
+            }
+            if alloc_data.data_start() as usize > self.end_of_page as usize {
+                dbg!(self.end_of_page);
+                dbg!(alloc_data.data_start());
+                panic!("Allocation start is right of page end")
+            }
         }
     }
     /// check that alloc.data_end is in page boundaries
     #[inline]
     pub fn check_alloc_end(&self, alloc_data: &AllocationData) {
-        if alloc_data.data_end() as usize > self.end_of_page as usize {
-            dbg!(self.end_of_page);
-            dbg!(alloc_data.data_end());
-            panic!("Allocation end is right of page end")
-        }
-        if (alloc_data.data_end() as usize) < self.start_of_page as usize {
-            dbg!(self.start_of_page);
-            dbg!(alloc_data.data_end());
-            panic!("Allocation end is left of page start")
+        #[cfg(feature = "consistency-checks")]
+        {
+            if alloc_data.data_end() as usize > self.end_of_page as usize {
+                dbg!(self.end_of_page);
+                dbg!(alloc_data.data_end());
+                panic!("Allocation end is right of page end")
+            }
+            if (alloc_data.data_end() as usize) < self.start_of_page as usize {
+                dbg!(self.start_of_page);
+                dbg!(alloc_data.data_end());
+                panic!("Allocation end is left of page start")
+            }
         }
     }
     /// check that alloc.space pointer is in page boundaries

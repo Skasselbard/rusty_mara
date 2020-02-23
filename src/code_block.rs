@@ -137,7 +137,9 @@ pub unsafe fn generate_code_block_for_payload_size(alloc_data: &mut AllocationDa
         );
     }
     alloc_data.set_code_block_size(code_block_size);
-    alloc_data.space.set_ptr(alloc_data.data_start().add(alloc_data.code_block_size()));
+    alloc_data
+        .space
+        .set_ptr(alloc_data.data_start().add(alloc_data.code_block_size()));
 }
 
 /// Build a CodeBlock for space that is managed internally (from the left side of the left codeBlock to the right side
@@ -317,7 +319,11 @@ unsafe fn generate_code_block_for_payload_size2(
         }
     }
 }
-// check if the given size is inside closed range [minimum, maximum]
+
+//////////////////////////////////////////////////
+// checks
+
+/// check if the given size is inside closed range [minimum, maximum]
 fn check_size(actual: usize, minimum: usize, maximum: usize) {
     #[cfg(feature = "consistency-checks")]
     {
@@ -358,7 +364,7 @@ fn check_order(lesser: *mut u8, greater: *mut u8) {
         }
     }
 }
-// checks if the free bit in this byte is set as expected
+/// checks if the free bit in this byte is set as expected
 fn check_free(code_block_start: *mut u8, expected: bool) {
     #[cfg(feature = "consistency-checks")]
     {

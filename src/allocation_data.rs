@@ -1,5 +1,4 @@
 use crate::code_block;
-use crate::globals::*;
 use crate::space::*;
 use crate::Page;
 
@@ -113,7 +112,7 @@ impl AllocationData {
     /// Reads data from code blocks and updates the cached pointers.
     /// Tries to read from ``data_start``, ``space.ptr-1`` and ``data_end``
     /// in that order.
-    pub fn read_and_cache_code_blocks(&mut self) {
+    pub fn cache_code_blocks(&mut self) {
         unsafe {
             // first try from data start
             if let Some(start) = self.data_start {
@@ -147,7 +146,7 @@ impl AllocationData {
             self.check_consistency();
         }
     }
-    /// Returns the allocation that succeeds self or None if self is the 
+    /// Returns the allocation that succeeds self or None if self is the
     /// last in the page.
     /// Caches the information that is stored in the code blocks
     pub fn right_neighbor(&self) -> Option<AllocationData> {
@@ -157,14 +156,14 @@ impl AllocationData {
                 let mut right = AllocationData::new();
                 right.set_page(self.page());
                 right.set_data_start(start);
-                right.read_and_cache_code_blocks();
+                right.cache_code_blocks();
                 Some(right)
             } else {
                 None
             }
         }
     }
-    /// Returns the allocation that precedes self or None if self is the 
+    /// Returns the allocation that precedes self or None if self is the
     /// first in the page.
     /// Caches the information that is stored in the code blocks
     pub fn left_neighbor(&self) -> Option<AllocationData> {
@@ -174,7 +173,7 @@ impl AllocationData {
                 let mut left = AllocationData::new();
                 left.set_page(self.page());
                 left.set_data_end(end);
-                left.read_and_cache_code_blocks();
+                left.cache_code_blocks();
                 Some(left)
             } else {
                 None
@@ -253,6 +252,7 @@ impl AllocationData {
             assert!(code_block::read_from_left(self.data_start()) == right_block_size,);
         }
     }
+
     //////////////////////////////////////////////////////////
     // Consistency checks
     #[inline]
@@ -381,7 +381,7 @@ impl AllocationData {
         #[cfg(feature = "consistency-checks")]
         {
             unsafe {
-                let next_target = self.space.next() as *const u8;
+                let next_target = self.space.next().ptr() as *const u8;
                 let start_of_page = (*self.page()).start_of_page();
                 let end_of_page = (*self.page()).end_of_page();
                 if !next_target.is_null()

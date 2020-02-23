@@ -48,15 +48,22 @@ impl Space {
         }
     }
     pub fn ptr(&self) -> *mut u8 {
-        self.ptr.expect("Space pointer was not cached before")
+        self.ptr.expect("Space pointer was not cached earlier")
     }
     pub fn size(&self) -> usize {
-        self.size.expect("Space pointer was not cached before")
+        self.size.expect("Space size was not cached earlier")
     }
     /// load the cached pointer to a nother free space
     /// This is different from loading from memory (see ``load_next``)
-    pub fn next(&self) -> *mut u8 {
-        self.next.expect("next pointer was not cached before")
+    pub fn next(&self) -> Space {
+        match self.next {
+            None => panic!("next pointer was not cached earlier"),
+            Some(ptr) => Self {
+                ptr: Some(ptr),
+                size: None,
+                next: None,
+            },
+        }
     }
     pub fn set_ptr(&mut self, ptr: *mut u8) {
         self.ptr = Some(ptr);
@@ -80,11 +87,11 @@ impl Space {
     /// This is different form the cache method ``set_next``
     pub fn write_next(&mut self, start_of_page: *const u8) {
         unsafe {
-            if self.next() == core::ptr::null_mut() {
+            if self.next().ptr() == core::ptr::null_mut() {
                 *(self.ptr() as *mut NextPointerType) = ERROR_NEXT_POINTER;
             } else {
                 *(self.ptr() as *mut NextPointerType) =
-                    (self.next().sub(start_of_page as usize)) as NextPointerType;
+                    (self.next().ptr().sub(start_of_page as usize)) as NextPointerType;
             }
         }
     }

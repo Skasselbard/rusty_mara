@@ -276,11 +276,11 @@ impl Test {
                             }
                         }
                     } else {
-                        let mut current_element = &mut AllocationData::new();
+                        let current_element = &mut AllocationData::new();
                         current_element.space.set_size(memory_size);
-                        current_element
-                            .space
-                            .set_ptr(bucket_list.first_for_size(current_element));
+                        // current_element
+                        //     .space
+                        //     .set_ptr(bucket_list.first_for_size(current_element.space.size()));
                         current_element.set_page(page as *mut Page);
                         //TODO: data start berechnen
                         while current_element.data_start() != block_pointer as *mut u8 {
