@@ -282,18 +282,4 @@ impl BucketList {
             }
         }
     }
-    // pub fn check_insert(&self, alloc_data: &AllocationData) {
-    //     #[cfg(feature = "consistency-checks")]
-    //     {
-    //         unsafe {
-    //             if self.is_in_list(alloc_data).0 != expected {
-    //                 panic!(
-    //                     "data is in list: {}\nexpected: {}",
-    //                     self.is_in_list(alloc_data).0,
-    //                     expected
-    //                 )
-    //             }
-    //         }
-    //     }
-    // }
 }

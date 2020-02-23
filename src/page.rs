@@ -148,78 +148,40 @@ impl Page {
     /// Deletes a reserved block and adds it into bucket list again.
     /// If the neighboring spaces are free they are merged wit this space.
     pub fn delete_block(&mut self, alloc_data: &mut AllocationData) {
-        unsafe {
-            alloc_data.set_page(self);
-            self.check_integrity();
-            let (memory_block_size, code_block_start) =
-                code_block::read_from_right(alloc_data.space.ptr().offset(-1));
-            alloc_data.set_data_start(code_block_start as *mut u8);
-            alloc_data.space.set_size(memory_block_size);
-            alloc_data.set_code_block_size(code_block::get_block_size(code_block_start));
-            #[cfg(feature = "statistic")]
-            {
-                Statistic::freeDynamic(memory_block_size, first_byte);
-            }
-            alloc_data.set_data_end(
-                alloc_data
-                    .space
-                    .ptr()
-                    .add(alloc_data.space.size())
-                    .add(alloc_data.code_block_size())
-                    .sub(1),
-            );
-            self.merge_with_neighbors(alloc_data);
-            self.check_integrity();
+        alloc_data.set_page(self);
+        self.check_integrity();
+        alloc_data.read_and_cache_code_blocks();
+        #[cfg(feature = "statistic")]
+        {
+            Statistic::freeDynamic(memory_block_size, first_byte);
         }
+        self.merge_with_neighbors(alloc_data);
+        self.check_integrity();
     }
     /// checks both neighboring spaces if they are free
     /// if so they are merged with the given allocation
     #[inline]
     fn merge_with_neighbors(&mut self, alloc_data: &mut AllocationData) {
         unsafe {
-            let mut left_alloc = AllocationData::new();
-            left_alloc.set_page(self);
-            left_alloc.set_data_end(alloc_data.data_start().sub(1));
-            let (left_space_size, l_code_block_start) =
-                code_block::read_from_right(left_alloc.data_end());
-            // check if we can merge left and respect the page boundaries
-            if self.start_of_page() < left_alloc.data_end()
-                && code_block::is_free(l_code_block_start)
-            {
-                left_alloc.space.set_size(left_space_size);
-                left_alloc.set_code_block_size(code_block::get_block_size(l_code_block_start));
-                left_alloc.set_data_start(
-                    l_code_block_start
-                        .sub(left_alloc.space.size())
-                        .sub(left_alloc.code_block_size()),
-                );
-                alloc_data.set_data_start(left_alloc.data_start());
-                self.bucket_list.remove(&mut left_alloc);
-                self.check_alloc_start(&left_alloc);
-                self.bucket_list.check_in_list(&left_alloc, false);
+            // merge with left if it is free space and self is not
+            // at the start of the page
+            if let Some(mut left_alloc) = alloc_data.left_neighbor() {
+                if code_block::is_free(left_alloc.data_start()) {
+                    alloc_data.set_data_start(left_alloc.data_start());
+                    self.bucket_list.remove(&mut left_alloc);
+                    self.check_alloc_start(&left_alloc);
+                    self.bucket_list.check_in_list(&left_alloc, false);
+                }
             }
-
-            let mut right_alloc = AllocationData::new();
-            right_alloc.set_data_start(alloc_data.data_end().add(1));
-            right_alloc.set_page(self);
-            // check if we can merge right and respact the page boundaries
-            if self.end_of_page > right_alloc.data_start()
-                && code_block::is_free(right_alloc.data_start())
-            {
-                right_alloc
-                    .space
-                    .set_size(code_block::read_from_left(right_alloc.data_start()));
-                right_alloc
-                    .set_code_block_size(code_block::get_block_size(right_alloc.data_start()));
-                alloc_data.set_data_end(
-                    alloc_data
-                        .data_end()
-                        .add(right_alloc.space.size())
-                        .add(2 * right_alloc.code_block_size()),
-                );
-                self.bucket_list.remove(&mut right_alloc);
-                self.check_alloc_end(&right_alloc);
-                self.bucket_list.check_in_list(&right_alloc, false);
+            // merge with right if it is free space and self is not
+            // at the end of the page
+            if let Some(mut right_alloc) = alloc_data.right_neighbor() {
+                if code_block::is_free(right_alloc.data_start()) {
+                    alloc_data.set_data_end(right_alloc.data_end());
+                    self.bucket_list.remove(&mut right_alloc);
+                    self.check_alloc_end(&right_alloc);
+                    self.bucket_list.check_in_list(&right_alloc, false);
+                }
             }
             // write code blocks with set free flag
             // and get code block and space information for free
@@ -233,45 +195,39 @@ impl Page {
         self.end_of_page as usize - self.start_of_page as usize
     }
     #[inline]
-    /// #### return the next page in the ring storage
+    /// return the next page in the ring storage
     pub fn get_next_page(&self) -> *mut Self {
         self.next_page
     }
     /// sets the next page
-    /// #### next_page
-    /// the next page
     #[inline]
     pub fn set_next_page(&mut self, next_page: *mut Self) {
         if next_page != core::ptr::null_mut() {}
         self.next_page = next_page;
     }
-    /// #### first_byte
-    /// a pointer to the block of interest
-    /// #### return
-    /// true if the pointer is in between the start of page and the left most byte of the static sector.
-    /// false otherwise. Blocks in the static sector CANNOT be detected with this function.
+    /// True if ``ptr`` is in between the start of page and the left most
+    /// byte of the static sector.
+    /// False otherwise.
     #[inline]
-    pub fn block_is_in_space(&self, first_byte: *const u8) -> bool {
-        self.start_of_page <= first_byte && first_byte < self.end_of_page
+    pub fn block_is_in_space(&self, ptr: *mut u8) -> bool {
+        self.start_of_page <= ptr && ptr < self.end_of_page as *mut u8
     }
-    /// #### return
-    /// a pointer to the first byte in the page
     #[inline]
     pub fn start_of_page(&self) -> *const u8 {
         self.start_of_page
     }
-    /// #### return
-    /// a pointer to the last byte in the page
     #[inline]
     pub fn end_of_page(&self) -> *const u8 {
         self.end_of_page
     }
-    /// #### return
-    /// the bucket list
     #[inline]
     pub fn bucket_list(&self) -> &BucketList {
         &self.bucket_list
     }
+
+    //////////////////////////////////////////////
+    // Checks
+
     /// Check that page start is before its end
     #[inline]
     fn check_integrity(&self) {
@@ -437,42 +393,18 @@ impl Page {
     fn check_dynamic_new_post(&self, alloc: &AllocationData) {
         #[cfg(feature = "consistency-checks")]
         {
-            unsafe {
-                self.check_alloc_start(alloc);
-                self.check_alloc_end(alloc);
-                alloc.check_consistency();
-                // check consistency of left neighbor
-                if alloc.data_start() > self.start_of_page as *mut u8 {
-                    let left_alloc = &mut AllocationData::new();
-                    left_alloc.set_data_end(alloc.data_start().sub(1));
-                    let (memory_size, block) = code_block::read_from_right(left_alloc.data_end());
-                    left_alloc.space.set_size(memory_size);
-                    left_alloc.set_code_block_size(code_block::get_block_size(block));
-                    left_alloc
-                        .set_data_start(block.sub(left_alloc.code_block_size()).sub(memory_size));
-                    left_alloc
-                        .space
-                        .set_ptr(left_alloc.data_start().add(left_alloc.code_block_size()));
+            self.check_alloc_start(alloc);
+            self.check_alloc_end(alloc);
+            alloc.check_consistency();
+            // check consistency of left neighbor
+            if alloc.data_start() > self.start_of_page as *mut u8 {
+                if let Some(left_alloc) = alloc.left_neighbor() {
                     left_alloc.check_consistency();
                 }
-                // check consistency of right neighbor
-                if alloc.data_start() > self.start_of_page as *mut u8 {
-                    let right_alloc = &mut AllocationData::new();
-                    right_alloc.set_data_start(alloc.data_end().add(1));
-                    right_alloc
-                        .space
-                        .set_size(code_block::read_from_left(right_alloc.data_start()));
-                    right_alloc
-                        .set_code_block_size(code_block::get_block_size(right_alloc.data_start()));
-                    right_alloc.set_data_end(
-                        right_alloc
-                            .data_start()
-                            .add(2 * right_alloc.code_block_size())
-                            .add(right_alloc.space.size()),
-                    );
-                    right_alloc
-                        .space
-                        .set_ptr(right_alloc.data_start().add(right_alloc.code_block_size()));
+            }
+            // check consistency of right neighbor
+            if alloc.data_start() > self.start_of_page as *mut u8 {
+                if let Some(right_alloc) = alloc.right_neighbor() {
                     right_alloc.check_consistency();
                 }
             }

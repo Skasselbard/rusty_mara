@@ -110,6 +110,78 @@ impl AllocationData {
     ///////////////////////////////////////////////////////
     // data manipulation
 
+    /// Reads data from code blocks and updates the cached pointers.
+    /// Tries to read from ``data_start``, ``space.ptr-1`` and ``data_end``
+    /// in that order.
+    pub fn read_and_cache_code_blocks(&mut self) {
+        unsafe {
+            // first try from data start
+            if let Some(start) = self.data_start {
+                self.space.set_size(code_block::read_from_left(start));
+                self.set_code_block_size(code_block::get_block_size(start));
+                self.space.set_ptr(start.add(self.code_block_size()));
+                self.set_data_end(start.add(2 * self.code_block_size()).add(self.space.size()));
+            } else {
+                //then from space start
+                if self.space.is_some() {
+                    let (memory_size, block) = code_block::read_from_right(self.space.ptr());
+                    self.space.set_size(memory_size);
+                    self.set_code_block_size(code_block::get_block_size(block));
+                    self.set_data_start(block);
+                    self.set_data_end(
+                        self.data_start()
+                            .add(2 * self.code_block_size())
+                            .add(self.space.size()),
+                    );
+                }
+                // end lastly try the end pointer or panic
+                else {
+                    let (memory_size, block) = code_block::read_from_right(self.data_end());
+                    self.space.set_size(memory_size);
+                    self.set_code_block_size(code_block::get_block_size(block));
+                    self.set_data_start(block.sub(self.code_block_size()).sub(memory_size));
+                    self.space
+                        .set_ptr(self.data_start().add(self.code_block_size()));
+                }
+            }
+            self.check_consistency();
+        }
+    }
+    /// Returns the allocation that succeeds self or None if self is the 
+    /// last in the page.
+    /// Caches the information that is stored in the code blocks
+    pub fn right_neighbor(&self) -> Option<AllocationData> {
+        unsafe {
+            let start = self.data_end().add(1);
+            if start < (*self.page()).end_of_page() as *mut u8 {
+                let mut right = AllocationData::new();
+                right.set_page(self.page());
+                right.set_data_start(start);
+                right.read_and_cache_code_blocks();
+                Some(right)
+            } else {
+                None
+            }
+        }
+    }
+    /// Returns the allocation that precedes self or None if self is the 
+    /// first in the page.
+    /// Caches the information that is stored in the code blocks
+    pub fn left_neighbor(&self) -> Option<AllocationData> {
+        unsafe {
+            let end = self.data_start().sub(1);
+            if end < (*self.page()).start_of_page() as *mut u8 {
+                let mut left = AllocationData::new();
+                left.set_page(self.page());
+                left.set_data_end(end);
+                left.read_and_cache_code_blocks();
+                Some(left)
+            } else {
+                None
+            }
+        }
+    }
+
     /// Copies a code block from the beginning of space to the end of space
     pub unsafe fn copy_code_block_to_end(&mut self) {
         #[cfg(feature = "consistency-checks")]
