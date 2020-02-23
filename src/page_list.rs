@@ -53,7 +53,7 @@ impl PageList {
     /// #### return
     /// a pointer to the block
     pub fn dynamic_new(&mut self, alloc_data: &mut AllocationData) {
-        alloc_data.check_space_size(1, self.page_size);
+        alloc_data.space.check_size(1, self.page_size);
         let current_page = self.first_page;
         loop {
             unsafe { (*current_page).get_dynamic_block(alloc_data) };

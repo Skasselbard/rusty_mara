@@ -217,11 +217,12 @@ impl AllocationData {
             is_free,
         );
         self.set_code_block_size(code_block_size);
-        self.copy_code_block_to_end();
-        // update allocation
+        self.space.set_ptr(self.data_start().add(code_block_size));
         self.space
             .set_size(self.calculate_data_size() - 2 * code_block_size);
-        self.space.set_ptr(self.data_start().add(code_block_size));
+        self.set_data_end(self.data_start().add(self.calculate_data_size()).sub(1));
+        self.copy_code_block_to_end();
+        // update allocation
         self.space.write_next(self.calculate_start_of_page());
         #[cfg(feature = "consistency-checks")]
         {
@@ -255,22 +256,6 @@ impl AllocationData {
 
     //////////////////////////////////////////////////////////
     // Consistency checks
-    #[inline]
-    pub fn check_space_size(&self, min: usize, max: usize) {
-        #[cfg(feature = "consistency-checks")]
-        {
-            if self.space.size() < min {
-                dbg!(self.space.size());
-                dbg!(min);
-                panic!("Space is smaller as expected");
-            }
-            if self.space.size() > max {
-                dbg!(self.space.size());
-                dbg!(max);
-                panic!("space is larger as expected");
-            }
-        }
-    }
     #[inline]
     pub fn check_data_size(&self, min: usize, max: usize) {
         #[cfg(feature = "consistency-checks")]

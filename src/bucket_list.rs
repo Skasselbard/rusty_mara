@@ -85,16 +85,16 @@ impl BucketList {
     /// This function does only give a free_space of the page. It does not alter the list itself.
     /// Non if no space was found
     #[inline]
-    pub unsafe fn get_free_space(&self, alloc_data: &mut AllocationData) -> Option<Space> {
+    pub unsafe fn get_free_space(&self, minimum_size: usize) -> Option<Space> {
         #[cfg(feature = "consistency-checks")]
         {
-            assert!(alloc_data.space.size() > 0);
+            assert!(minimum_size > 0);
         }
-        let mut bucket_index = Self::lookup_bucket(alloc_data.space.size());
+        let mut bucket_index = Self::lookup_bucket(minimum_size);
         let mut found;
         loop {
             bucket_index = self.find_non_empty_bucket(bucket_index);
-            found = self.find_fitting_space_in_bucket(alloc_data.space.size(), bucket_index);
+            found = self.find_fitting_space_in_bucket(minimum_size, bucket_index);
             match found {
                 None => bucket_index += 1,
                 Some(_) => {}
@@ -103,7 +103,7 @@ impl BucketList {
                 break;
             }
         }
-        self.check_found(&found, alloc_data.space.size());
+        self.check_found(&found, minimum_size);
         found
     }
     /// removes ``space`` from the bucket list

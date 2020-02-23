@@ -108,4 +108,24 @@ impl Space {
             }
         }
     }
+
+    /////////////////////////////////////////////
+    // checks
+
+    #[inline]
+    pub fn check_size(&self, min: usize, max: usize) {
+        #[cfg(feature = "consistency-checks")]
+        {
+            if self.size() < min {
+                dbg!(self.size());
+                dbg!(min);
+                panic!("Space is smaller as expected");
+            }
+            if self.size() > max {
+                dbg!(self.size());
+                dbg!(max);
+                panic!("space is larger as expected");
+            }
+        }
+    }
 }

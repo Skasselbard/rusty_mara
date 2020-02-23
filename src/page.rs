@@ -1,6 +1,7 @@
 use crate::bucket_list::BucketList;
 use crate::code_block;
 use crate::globals::*;
+use crate::space::Space;
 use crate::AllocationData;
 use core::mem::size_of;
 use core::ops::*;
@@ -29,8 +30,8 @@ impl Page {
             alloc_data.set_data_start(page_memory);
             alloc_data.set_data_end(page_memory.add(page_size).sub(1));
             alloc_data.set_page(self);
+            alloc_data.space.set_next(core::ptr::null_mut());
             alloc_data.write_data_size_code_blocks(true);
-            alloc_data.space.write_next(core::ptr::null_mut());
             self.bucket_list.insert(&mut alloc_data.space);
 
             self.check_integrity();
@@ -45,46 +46,38 @@ impl Page {
     pub fn get_dynamic_block(&mut self, alloc_data: &mut AllocationData) {
         unsafe {
             alloc_data.set_page(self);
-            alloc_data.check_space_size(1, self.page_size());
+            alloc_data.space.check_size(1, self.page_size());
             self.check_integrity();
 
-            let mut free_alloc = &mut alloc_data.clone();
-            self.bucket_list.get_free_space(&mut free_alloc);
-            if free_alloc.space.ptr().is_null() {
-                self.check_integrity();
-                return;
-            } else {
-                // Remove this free space from list
-                // the remaining space will be added again later
-                self.bucket_list.remove(&free_alloc.space);
-                // Calculate where the allocation starts
-                // It will be at the beginning of the found free space
-                alloc_data.set_data_start(free_alloc.space.ptr().sub(
-                    code_block::get_needed_code_block_size(free_alloc.space.size()),
-                ));
-                // next has to be cached
-                free_alloc
-                    .space
-                    .set_next(free_alloc.space.read_next(self.start_of_page));
-                // cache the end of the free space for later
-                free_alloc.set_data_end(
-                    free_alloc
-                        .space
-                        .ptr()
-                        .add(free_alloc.space.size())
-                        .add(code_block::get_block_size(alloc_data.data_start()))
-                        .sub(1),
-                );
-                // split the free space in two
-                self.split_free_space(alloc_data, free_alloc);
-                // no space remains
-                if free_alloc.space.size() != 0 {
-                    self.bucket_list.insert(&mut free_alloc.space);
-                } else {
-                    // Edge Case: If the remaining space is too small to be used again,
-                    // simply return a larger block
-                    code_block::set_free(alloc_data.data_start(), false);
-                    alloc_data.copy_code_block_to_end();
+            match self.bucket_list.get_free_space(alloc_data.space.size()) {
+                None => {
+                    self.check_integrity();
+                    return;
+                }
+                Some(mut free_space) => {
+                    // Remove this free space from list
+                    // the remaining space will be added again later
+                    self.bucket_list.remove(&free_space);
+                    // Calculate where the allocation starts
+                    // It will be at the beginning of the found free space
+                    alloc_data.set_data_start(
+                        free_space
+                            .ptr()
+                            .sub(code_block::get_needed_code_block_size(free_space.size())),
+                    );
+                    // next has to be cached
+                    free_space.set_next(free_space.read_next(self.start_of_page));
+                    // split the free space in two
+                    let mut remaining = self.split_free_space(alloc_data, free_space);
+                    // check if no space remains
+                    if remaining.space.size() != 0 {
+                        self.bucket_list.insert(&mut remaining.space);
+                    } else {
+                        // Edge Case: If the remaining space is too small to be used again,
+                        // simply return a larger block
+                        code_block::set_free(alloc_data.data_start(), false);
+                        alloc_data.copy_code_block_to_end();
+                    }
                 }
             }
             self.check_integrity();
@@ -102,18 +95,29 @@ impl Page {
     /// In that case an AllocationData with a ``space_size`` of ``0`` is returned
     /// During the process the code blocks are update accordingly
     #[inline]
-    fn split_free_space(&self, alloc_data: &mut AllocationData, free_alloc: &mut AllocationData) {
+    fn split_free_space(
+        &self,
+        alloc_data: &mut AllocationData,
+        free_space: Space,
+    ) -> AllocationData {
         unsafe {
-            self.check_split_pre(alloc_data, free_alloc);
+            self.check_split_pre(alloc_data, &free_space);
 
+            let mut free_alloc = AllocationData::new();
             // Space to small to cut something of
-            if free_alloc.space.size().sub(alloc_data.space.size()) < SMALLEST_POSSIBLE_FREE_SPACE {
+            if free_space.size().sub(alloc_data.space.size()) < SMALLEST_POSSIBLE_FREE_SPACE {
                 free_alloc.space.set_size(0);
             }
             // space is big enough to cut
             else {
-                // alloc_data.space.set_ptr(alloc_data.data_start().add(alloc_data.code_block_size()));
-                // alloc_data.set_data_end(alloc_data.space.ptr().add(alloc_data.space.size()));
+                // cache the end of the free space for later
+                free_alloc.set_data_end(
+                    free_space
+                        .ptr()
+                        .add(free_space.size())
+                        .add(code_block::get_block_size(alloc_data.data_start()))
+                        .sub(1),
+                );
                 // code blocks might shrink here
                 alloc_data.write_space_size_code_blocks(false);
                 free_alloc.set_page(alloc_data.page());
@@ -122,6 +126,7 @@ impl Page {
 
                 self.check_split_post(alloc_data, &free_alloc);
             }
+            free_alloc
         }
     }
     /// Deletes a reserved block and adds it into bucket list again.
@@ -144,7 +149,7 @@ impl Page {
         unsafe {
             // merge with left if it is free space and self is not
             // at the start of the page
-            if let Some(mut left_alloc) = alloc_data.left_neighbor() {
+            if let Some(left_alloc) = alloc_data.left_neighbor() {
                 if code_block::is_free(left_alloc.data_start()) {
                     alloc_data.set_data_start(left_alloc.data_start());
                     self.bucket_list.remove(&left_alloc.space);
@@ -154,7 +159,7 @@ impl Page {
             }
             // merge with right if it is free space and self is not
             // at the end of the page
-            if let Some(mut right_alloc) = alloc_data.right_neighbor() {
+            if let Some(right_alloc) = alloc_data.right_neighbor() {
                 if code_block::is_free(right_alloc.data_start()) {
                     alloc_data.set_data_end(right_alloc.data_end());
                     self.bucket_list.remove(&right_alloc.space);
@@ -282,17 +287,17 @@ impl Page {
     }
     // check preconditions of split
     #[inline]
-    pub fn check_split_pre(&self, left_alloc: &AllocationData, right_alloc: &AllocationData) {
+    pub fn check_split_pre(&self, left_alloc: &AllocationData, free_space: &Space) {
         #[cfg(feature = "consistency-checks")]
         {
             // pointer is in page
             self.check_alloc_start(left_alloc);
             // right alloc is big enough for left alloc to fit in
             // and small enough to fit in page
-            right_alloc.check_space_size(
+            free_space.check_size(
                 left_alloc.space.size(),
                 self.page_size()
-                    .sub(2 * code_block::get_needed_code_block_size(right_alloc.space.size())),
+                    .sub(2 * code_block::get_needed_code_block_size(free_space.size())),
             )
         }
     }
@@ -310,7 +315,7 @@ impl Page {
                 right_alloc.check_next_boundaries();
                 self.check_alloc(left_alloc);
                 self.check_alloc(right_alloc);
-                right_alloc.check_space_size(
+                right_alloc.space.check_size(
                     size_of::<NextPointerType>(),
                     self.page_size()
                         .sub(left_alloc.calculate_data_size())
@@ -370,8 +375,12 @@ impl Page {
                     panic!("code blocks are not equal")
                 }
                 // cached space matches with code block space
-                left_alloc.check_space_size(left_memory_size, left_memory_size);
-                right_alloc.check_space_size(right_memory_size, right_memory_size);
+                left_alloc
+                    .space
+                    .check_size(left_memory_size, left_memory_size);
+                right_alloc
+                    .space
+                    .check_size(right_memory_size, right_memory_size);
             }
         }
     }
