@@ -28,24 +28,12 @@ impl Mara {
     /// start of data array
     /// #### data_size
     /// length of the data array in bytes
-    pub fn new(page_size: usize, data: *mut u8, data_size: usize) -> Self {
-        if page_size > globals::MAX_PAGE_SIZE {
+    pub fn new(data: *mut u8, data_size: usize) -> Self {
+        if data_size > globals::MAX_PAGE_SIZE {
             panic!("Mara: Max page size is {} bytes", globals::MAX_PAGE_SIZE);
         }
-        // compute how many pages fit in the memory and
-        // consider the size that is needed to store the page objects
-        let mut max_pages = data_size / page_size;
-        let mut page_object_data_size = max_pages * size_of::<Page>();
-        while (data_size - page_object_data_size) / page_size != max_pages {
-            max_pages = max_pages - 1;
-            page_object_data_size = page_object_data_size - 1;
-        }
-        if max_pages <= 0 {
-            panic!("Mara: Cannot fit page in given memory")
-        } else {
-            let page_list = UnsafeCell::new(PageList::new(page_size, data, data_size, max_pages));
-            Self { page_list }
-        }
+        let page_list = UnsafeCell::new(PageList::new(data, data_size));
+        Self { page_list }
     }
 
     pub(crate) fn page_list(&self) -> &mut PageList {

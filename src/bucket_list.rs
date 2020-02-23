@@ -253,7 +253,7 @@ impl BucketList {
                     dbg!(block_size);
                     dbg!(memory_size);
                     dbg!((*self.page).page_size() - 2 * block_size);
-                    panic!("space in bucket list is larger then the page")
+                    panic!("space in bucket list does not equal page size")
                 }
             }
         }

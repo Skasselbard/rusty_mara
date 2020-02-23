@@ -23,12 +23,12 @@ impl Page {
             let this = self as *mut Page;
             self.next_page = core::ptr::null_mut();
             self.start_of_page = page_memory;
-            self.end_of_page = page_memory.add(page_size);
+            self.end_of_page = page_memory.add(page_size).sub(1);
             code_block::set_free(page_memory, true);
             self.bucket_list.init(this);
             let mut alloc_data = AllocationData::new();
             alloc_data.set_data_start(page_memory);
-            alloc_data.set_data_end(page_memory.add(page_size).sub(1));
+            alloc_data.set_data_end(self.end_of_page() as *mut u8);
             alloc_data.set_page(self);
             alloc_data.write_data_size_code_blocks(true);
             alloc_data.space.set_next(core::ptr::null_mut());
@@ -182,7 +182,7 @@ impl Page {
     }
     #[inline]
     pub fn page_size(&self) -> usize {
-        self.end_of_page as usize - self.start_of_page as usize
+        self.end_of_page as usize - self.start_of_page as usize + 1
     }
     #[inline]
     /// return the next page in the ring storage

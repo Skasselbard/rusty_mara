@@ -63,7 +63,6 @@ pub struct TestBuilder {
     /// the seed that is used for the rng
     seed: usize,
 
-    page_size: usize,
     memory: *mut u8,
     memory_size: usize,
 }
@@ -79,14 +78,13 @@ impl TestBuilder {
             average_size: 16,
             max_size: 1000,
             seed: 123456789,
-            page_size: 0x80_0000, // 100 kb
             memory,
             memory_size,
         }
     }
 
     pub fn build(self) -> Test {
-        let mara = Mara::new(self.page_size, self.memory, self.memory_size);
+        let mara = Mara::new(self.memory, self.memory_size);
         Test {
             free_space_not_in_bucket_list: 0,
             corrupted_blocks: 0,
@@ -248,7 +246,7 @@ impl Test {
             self.free_space_not_in_bucket_list = 0;
             self.corrupted_blocks = 0;
 
-            let mut page = self.mara.page_list().get_first_page();
+            let mut page = self.mara.page_list().get_page();
             loop {
                 let mut block_pointer = (*page).start_of_page() as *mut u8;
                 while block_pointer < (*page).end_of_page() as *mut u8 {
@@ -296,7 +294,7 @@ impl Test {
                         block_pointer.offset((memory_size + 2 * code_block_size) as isize);
                 }
                 page = (*page).get_next_page();
-                if !(page != (*self.mara.page_list()).get_first_page()) {
+                if !(page != (*self.mara.page_list()).get_page()) {
                     break;
                 }
             }
