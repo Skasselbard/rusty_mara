@@ -102,7 +102,7 @@ impl BucketList {
                     break;
                 }
             }
-            if bucket_index == (BUCKET_LIST_SIZE - 1) {
+            if bucket_index == (BUCKET_LIST_SIZE) {
                 space = None;
                 break;
             }

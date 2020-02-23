@@ -68,7 +68,11 @@ pub fn read_from_left(first_byte: *mut u8) -> usize {
                 size <<= 7; //shift the old byte 7  bits to the left to make space for the next 7 bits
             }
             size |= *current_byte as usize & CONTINUE_DATA_MASK; //insert the last 7 bits of the current byte at the end of size
-            check_size(size, size_of::<NextPointerType>(), MAX_PAGE_SIZE - 2 * size);
+            check_size(
+                size,
+                size_of::<NextPointerType>(),
+                MAX_PAGE_SIZE - 2 * get_needed_code_block_size(MAX_PAGE_SIZE),
+            );
             check_bits(*first_byte, SIZE_BIT, false);
         }
         size
@@ -103,7 +107,11 @@ pub unsafe fn read_from_right(first_byte: *mut u8) -> (usize, *mut u8) {
         tmp <<= 7 * m; //shift them to the appropriate position
         size |= tmp; //merge size and tmp
         out_left_byte = current_byte;
-        check_size(size, size_of::<NextPointerType>(), MAX_PAGE_SIZE - 2 * size);
+        check_size(
+            size,
+            size_of::<NextPointerType>(),
+            MAX_PAGE_SIZE - 2 * get_needed_code_block_size(MAX_PAGE_SIZE),
+        );
         check_bits(*out_left_byte, SIZE_BIT, false); //first bit must not be set
         check_bits(*first_byte, SIZE_BIT, false); //first bit of the last byte must not be set
         check_order(out_left_byte, first_byte);
