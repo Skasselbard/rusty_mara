@@ -62,10 +62,6 @@ impl AllocationData {
         }
         panic!("Cannot determine data size")
     }
-    #[inline]
-    pub fn calculate_start_of_page(&self) -> *const u8 {
-        unsafe { (*self.page()).start_of_page() }
-    }
     /// calculates the first byte of the right code block
     /// ignores the currently cached value
     #[inline]
@@ -119,18 +115,24 @@ impl AllocationData {
                 self.space.set_size(code_block::read_from_left(start));
                 self.set_code_block_size(code_block::get_block_size(start));
                 self.space.set_ptr(start.add(self.code_block_size()));
-                self.set_data_end(start.add(2 * self.code_block_size()).add(self.space.size()));
+                self.set_data_end(
+                    start
+                        .add(2 * self.code_block_size())
+                        .add(self.space.size())
+                        .sub(1),
+                );
             } else {
                 //then from space start
                 if self.space.is_some() {
-                    let (memory_size, block) = code_block::read_from_right(self.space.ptr());
+                    let (memory_size, block) = code_block::read_from_right(self.space.ptr().sub(1));
                     self.space.set_size(memory_size);
                     self.set_code_block_size(code_block::get_block_size(block));
                     self.set_data_start(block);
                     self.set_data_end(
                         self.data_start()
                             .add(2 * self.code_block_size())
-                            .add(self.space.size()),
+                            .add(self.space.size())
+                            .sub(1),
                     );
                 }
                 // end lastly try the end pointer or panic
@@ -143,7 +145,6 @@ impl AllocationData {
                         .set_ptr(self.data_start().add(self.code_block_size()));
                 }
             }
-            self.check_consistency();
         }
     }
     /// Returns the allocation that succeeds self or None if self is the
@@ -169,7 +170,7 @@ impl AllocationData {
     pub fn left_neighbor(&self) -> Option<AllocationData> {
         unsafe {
             let end = self.data_start().sub(1);
-            if end < (*self.page()).start_of_page() as *mut u8 {
+            if end > (*self.page()).start_of_page() as *mut u8 {
                 let mut left = AllocationData::new();
                 left.set_page(self.page());
                 left.set_data_end(end);
@@ -218,12 +219,9 @@ impl AllocationData {
         );
         self.set_code_block_size(code_block_size);
         self.space.set_ptr(self.data_start().add(code_block_size));
-        self.space
-            .set_size(self.calculate_data_size() - 2 * code_block_size);
+        self.space.cache_size_from_code_block();
         self.set_data_end(self.data_start().add(self.calculate_data_size()).sub(1));
         self.copy_code_block_to_end();
-        // update allocation
-        self.space.write_next(self.calculate_start_of_page());
         #[cfg(feature = "consistency-checks")]
         {
             let (right_block_size, _) = code_block::read_from_right(self.data_end());
@@ -269,16 +267,6 @@ impl AllocationData {
                 dbg!(self.calculate_data_size());
                 dbg!(max);
                 panic!("Space size is larger as expected");
-            }
-        }
-    }
-    #[inline]
-    pub fn check_space(&self) {
-        #[cfg(feature = "consistency-checks")]
-        {
-            if self.space.ptr().is_null() {
-                dbg!(self.space.ptr());
-                panic!("space is null")
             }
         }
     }
@@ -362,21 +350,14 @@ impl AllocationData {
         }
     }
     #[inline]
-    pub fn check_next_boundaries(&self) {
+    pub fn check_neighbors(&self) {
         #[cfg(feature = "consistency-checks")]
         {
-            unsafe {
-                let next_target = self.space.next().ptr() as *const u8;
-                let start_of_page = (*self.page()).start_of_page();
-                let end_of_page = (*self.page()).end_of_page();
-                if !next_target.is_null()
-                    && (next_target <= start_of_page || next_target >= end_of_page)
-                {
-                    dbg!(next_target);
-                    dbg!(start_of_page);
-                    dbg!(end_of_page);
-                    panic!("next points outside of the page")
-                }
+            if let Some(left) = self.left_neighbor() {
+                left.check_consistency();
+            }
+            if let Some(right) = self.right_neighbor() {
+                right.check_consistency();
             }
         }
     }

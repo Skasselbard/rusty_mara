@@ -1,8 +1,7 @@
-use crate::bucket_list::BucketList;
 use crate::code_block;
-use crate::globals::*;
 use crate::page::Page;
 use crate::{AllocationData, Mara};
+use core::mem::size_of;
 use rand::distributions::{
     uniform::{UniformFloat, UniformSampler},
     Uniform,
@@ -190,12 +189,11 @@ impl Test {
                 if !dynamic_pointers.is_empty() && rnd_val <= self.p_free {
                     let deleted_index =
                         rng.sample(dynamic_variable_distribution) % dynamic_pointers.len() as usize;
-                    let to_delete =
-                        *dynamic_pointers.get(deleted_index).expect("item not found") as *mut usize;
+                    let to_delete = *dynamic_pointers.get(deleted_index).expect("item not found");
                     unsafe {
-                        let size = code_block::read_from_left(to_delete as *mut u8);
+                        let size = code_block::read_from_right(to_delete.sub(1) as *mut u8).0;
                         for i in 0..size {
-                            *(to_delete.add(i)) = 0b00000000;
+                            *(to_delete.add(i)) = 0b0000_0000;
                         }
                     }
 
@@ -234,7 +232,7 @@ impl Test {
                 FillRequestedMemory::Ones => 1,
                 FillRequestedMemory::AddressShortcut => address as usize,
             };
-            for i in 0..size {
+            for i in 0..size / size_of::<usize>() {
                 unsafe { *(address.add(i) as *mut usize) = value_at_address };
             }
         }
@@ -252,7 +250,6 @@ impl Test {
 
             let mut page = self.mara.page_list().get_first_page();
             loop {
-                let bucket_list = (*page).bucket_list();
                 let mut block_pointer = (*page).start_of_page() as *mut u8;
                 while block_pointer < (*page).end_of_page() as *mut u8 {
                     let memory_size = code_block::read_from_left(block_pointer);

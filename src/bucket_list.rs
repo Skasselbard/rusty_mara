@@ -1,7 +1,6 @@
 use crate::code_block;
 use crate::globals::*;
 use crate::space::Space;
-use crate::AllocationData;
 use crate::Page;
 
 pub struct BucketList {
@@ -91,20 +90,25 @@ impl BucketList {
             assert!(minimum_size > 0);
         }
         let mut bucket_index = Self::lookup_bucket(minimum_size);
-        let mut found;
+        let space;
         loop {
             bucket_index = self.find_non_empty_bucket(bucket_index);
-            found = self.find_fitting_space_in_bucket(minimum_size, bucket_index);
-            match found {
+            match self.find_fitting_space_in_bucket(minimum_size, bucket_index) {
                 None => bucket_index += 1,
-                Some(_) => {}
+                Some(mut fiting) => {
+                    fiting.cache_size_from_code_block();
+                    fiting.cache_next((*self.page).start_of_page());
+                    space = Some(fiting);
+                    break;
+                }
             }
             if bucket_index == (BUCKET_LIST_SIZE - 1) {
+                space = None;
                 break;
             }
         }
-        self.check_found(&found, minimum_size);
-        found
+        self.check_found(&space, minimum_size);
+        space
     }
     /// removes ``space`` from the bucket list
     /// panics if it was not found
@@ -194,14 +198,14 @@ impl BucketList {
             // empty bucket: return not found
             if current_element.ptr().is_null() {}
             let start_of_page = (*self.page).start_of_page();
-            current_element.set_next(current_element.read_next(start_of_page));
+            current_element.cache_next(start_of_page);
             while !current_element.next().ptr().is_null()
                 && current_element.next().ptr() != space.ptr()
             {
                 // iterate free space
                 current_element.set_ptr(current_element.next().ptr());
                 // cache next pointer fom new free space
-                current_element.set_next(current_element.read_next(start_of_page));
+                current_element.cache_next(start_of_page);
             }
             #[cfg(feature = "consistency-checks")]
             {

@@ -1,3 +1,4 @@
+use crate::code_block;
 /// Basic Structure:
 /// ```
 /// Standard Free Space (assuming a next pointer size of 4 byte = 32 bit):
@@ -107,6 +108,13 @@ impl Space {
                 start_of_page.add(next as usize) as *mut u8
             }
         }
+    }
+    pub fn cache_size_from_code_block(&mut self) {
+        unsafe { self.set_size(code_block::read_from_right(self.ptr().sub(1)).0) }
+    }
+    /// Reads the next pointer at ``ptr`` and stores the encoded address in ``next``
+    pub fn cache_next(&mut self, start_of_page: *const u8) {
+        self.set_next(self.read_next(start_of_page))
     }
 
     /////////////////////////////////////////////
