@@ -52,22 +52,14 @@ impl BucketList {
             assert!(index < BUCKET_LIST_SIZE);
         }
         let mut space = self.get(index);
-        space = if let Some(mut space) = space {
-            // Search to the end of the bucket
+        // Search to the end of the bucket
+        while let Some(unwrapped) = space {
             // Check if the adjacent code block encodes a fitting size
-            while !space.ptr().is_null()
-                && code_block::read_from_right(space.ptr().sub(1)).0 < minimum_size
-            {
-                space.set_ptr(space.read_next((*self.page).start_of_page()))
+            if code_block::read_from_right(unwrapped.ptr().sub(1)).0 >= minimum_size {
+                break;
             }
-            // check the result
-            match space.ptr().is_null() {
-                true => None,
-                false => Some(space),
-            }
-        } else {
-            None
-        };
+            space = unwrapped.read_next((*self.page).start_of_page());
+        }
         self.check_found(&space, minimum_size);
         space
     }
@@ -117,11 +109,17 @@ impl BucketList {
         if in_list {
             // alloc data is not the first element in the bucket
             if let Some(mut predecessor) = predecessor {
-                predecessor.set_next(space.next().ptr());
+                predecessor.set_next(space.next());
+                predecessor.write_next((*self.page).start_of_page())
             }
             // alloc data is the first element in the bucket
             else {
-                self.bucket_list[Self::lookup_bucket(space.size())] = space.next().ptr();
+                match space.next() {
+                    Some(next) => self.bucket_list[Self::lookup_bucket(space.size())] = next.ptr(),
+                    None => {
+                        self.bucket_list[Self::lookup_bucket(space.size())] = core::ptr::null_mut()
+                    }
+                }
             }
             self.check_in_list(space, false);
         } else {
@@ -155,11 +153,8 @@ impl BucketList {
     pub unsafe fn insert(&mut self, space: &mut Space) {
         self.check_in_list(space, false);
 
-        space.set_next(match self.first_for_size(space.size()) {
-            Some(space) => space.ptr(),
-            None => core::ptr::null_mut(),
-        });
-        space.write_next(space.next().ptr());
+        space.set_next(self.first_for_size(space.size()));
+        space.write_next((*self.page).start_of_page());
         self.bucket_list[Self::lookup_bucket(space.size())] = space.ptr();
 
         self.check_in_list(space, true);
@@ -190,35 +185,33 @@ impl BucketList {
     /// is in list and the predecessor, if one is found(Output)
     #[inline]
     pub unsafe fn is_in_list(&self, space: &Space) -> (bool, Option<Space>) {
-        if let Some(mut current_element) = self.first_for_size(space.size()) {
+        if let Some(mut predecessor) = self.first_for_size(space.size()) {
             // first element is the searched one
-            if current_element.ptr() == space.ptr() {
+            if predecessor.ptr() == space.ptr() {
                 return (true, None);
             }
-            // empty bucket: return not found
-            if current_element.ptr().is_null() {}
             let start_of_page = (*self.page).start_of_page();
-            current_element.cache_next(start_of_page);
-            while !current_element.next().ptr().is_null()
-                && current_element.next().ptr() != space.ptr()
-            {
+            predecessor.cache_next(start_of_page);
+            while let Some(next) = predecessor.next() {
+                if next.ptr() == space.ptr() {
+                    break;
+                }
                 // iterate free space
-                current_element.set_ptr(current_element.next().ptr());
+                predecessor = next;
                 // cache next pointer fom new free space
-                current_element.cache_next(start_of_page);
+                predecessor.cache_next(start_of_page);
             }
             #[cfg(feature = "consistency-checks")]
             {
                 assert!(
-                    current_element.next().ptr().is_null()
+                    predecessor.next().is_none()
                         || space.ptr().is_null()
-                        || current_element.ptr().is_null()
-                        || current_element.next().ptr() == space.ptr(),
+                        || predecessor.ptr().is_null()
+                        || predecessor.next().unwrap().ptr() == space.ptr(),
                 );
             }
             // compute result
-            let in_list = !current_element.next().ptr().is_null();
-            (in_list, Some(current_element))
+            (predecessor.next().is_some(), Some(predecessor))
         }
         // bucket is empty
         else {

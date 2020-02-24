@@ -283,7 +283,7 @@ impl Test {
                                 break;
                             }
                             let next = current_element.space.read_next((*page).start_of_page());
-                            current_element.space.set_ptr(next)
+                            // current_element.space.set_ptr(next)
                         }
                         if current_element.space.ptr().is_null() {
                             self.free_space_not_in_bucket_list =

@@ -56,14 +56,15 @@ impl Space {
     }
     /// load the cached pointer to a nother free space
     /// This is different from loading from memory (see ``load_next``)
-    pub fn next(&self) -> Space {
+    pub fn next(&self) -> Option<Space> {
         match self.next {
             None => panic!("next pointer was not cached earlier"),
-            Some(ptr) => Self {
+            Some(ptr) if ptr == core::ptr::null_mut() => None,
+            Some(ptr) => Some(Self {
                 ptr: Some(ptr),
                 size: None,
                 next: None,
-            },
+            }),
         }
     }
     pub fn set_ptr(&mut self, ptr: *mut u8) {
@@ -74,8 +75,11 @@ impl Space {
     }
     /// Cache ``free_space`` as next free space
     /// This is different from writing the pointer to memory (see ``write next``)
-    pub fn set_next(&mut self, free_space: *mut u8) {
-        self.next = Some(free_space);
+    pub fn set_next(&mut self, space: Option<Space>) {
+        match space {
+            None => self.next = Some(core::ptr::null_mut()),
+            Some(space) => self.next = Some(space.ptr()),
+        }
     }
     pub fn is_some(&self) -> bool {
         self.ptr.is_some()
@@ -88,24 +92,28 @@ impl Space {
     /// This is different form the cache method ``set_next``
     pub fn write_next(&mut self, start_of_page: *const u8) {
         unsafe {
-            if self.next().ptr() == core::ptr::null_mut() {
-                *(self.ptr() as *mut NextPointerType) = ERROR_NEXT_POINTER;
-            } else {
-                *(self.ptr() as *mut NextPointerType) =
-                    (self.next().ptr().sub(start_of_page as usize)) as NextPointerType;
+            match self.next() {
+                None => *(self.ptr() as *mut NextPointerType) = ERROR_NEXT_POINTER,
+                Some(next) => {
+                    *(self.ptr() as *mut NextPointerType) =
+                        (next.ptr().sub(start_of_page as usize)) as NextPointerType
+                }
             }
         }
     }
     /// Reads the pointer that is stored at the location of ``ptr``
     /// The stored pointer is an offset from start of page.
     /// This is different from the cache method ``next``
-    pub fn read_next(&self, start_of_page: *const u8) -> *mut u8 {
+    pub fn read_next(&self, start_of_page: *const u8) -> Option<Space> {
         unsafe {
             let next = *(self.ptr() as *mut NextPointerType);
-            if next == ERROR_NEXT_POINTER {
-                core::ptr::null_mut()
-            } else {
-                start_of_page.add(next as usize) as *mut u8
+            match next {
+                ERROR_NEXT_POINTER => None,
+                ptr => Some(Self {
+                    ptr: Some(start_of_page.add(ptr as usize) as *mut u8),
+                    size: None,
+                    next: None,
+                }),
             }
         }
     }

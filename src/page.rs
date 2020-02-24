@@ -31,7 +31,7 @@ impl Page {
             alloc_data.set_data_end(self.end_of_page() as *mut u8);
             alloc_data.set_page(self);
             alloc_data.write_data_size_code_blocks(true);
-            alloc_data.space.set_next(core::ptr::null_mut());
+            alloc_data.space.set_next(None);
             alloc_data.space.write_next(self.start_of_page);
             self.bucket_list.insert(&mut alloc_data.space);
 
