@@ -1,3 +1,5 @@
+#![cfg(feature = "consistency_tests")]
+
 use crate::code_block;
 use crate::page::Page;
 use crate::space::Space;

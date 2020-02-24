@@ -1,3 +1,5 @@
+#![cfg(feature = "consistency_tests")]
+
 extern crate rusty_mara;
 #[test]
 fn test_short() {
@@ -14,7 +16,7 @@ fn test_long() {
     const MEMORY_SIZE: usize = 0x4000_0000; // 1GB
     let mut memory: Box<[u8]> = vec![0; MEMORY_SIZE].into_boxed_slice();
     let mut test = TestBuilder::new((*memory).as_mut_ptr(), MEMORY_SIZE)
-        .amount_new_variables(1_000_000_000)
+        .amount_new_variables(1_000_000)
         .build();
     test.run();
 }

@@ -4,13 +4,10 @@ version = "0.1.0"
 authors = ["\"tom\" <\"tom.meyer89@gmail.com\">"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-#[devdependencies]
+[devdependencies]
 rand = {version="0.7.3", features = ["small_rng"]}
 
 [features]
-default = ["consistency-checks"]
+# default = ["consistency-checks"]
 consistency-checks = []
-# statistic = []
+consistency_tests = []

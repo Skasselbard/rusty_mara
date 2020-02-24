@@ -10,6 +10,7 @@ mod page;
 mod page_list;
 mod space;
 
+#[cfg(feature = "consistency_tests")]
 pub use consistency::TestBuilder;
 
 use alloc::alloc::{GlobalAlloc, Layout};
