@@ -181,8 +181,8 @@ pub unsafe fn generate_code_block_for_internal_size(
     );
     check_size(
         code_block_size,
-        get_block_size(left_start_of_block),
-        get_block_size(left_start_of_block),
+        get_block_size(left_start_of_block, false),
+        get_block_size(left_start_of_block, false),
     );
     #[cfg(feature = "consistency-checks")]
     {
@@ -212,15 +212,21 @@ pub fn is_free(first_byte: *const u8) -> bool {
 /// the first byte of the codeBlock, from the left
 /// #### return
 /// the number of bytes used by this block
-pub unsafe fn get_block_size(first_byte: *const u8) -> usize {
-    if *first_byte & SIZE_BIT > 0 {
-        return 1;
-    }
-    let mut current_byte = first_byte.offset(1);
-    let mut size: usize = 2;
-    while *current_byte & SIZE_BIT > 0 {
-        current_byte = current_byte.offset(1);
-        size = size + 1;
+pub unsafe fn get_block_size(first_byte: *const u8, from_right: bool) -> usize {
+    let mut size: usize = 1;
+    if *first_byte & SIZE_BIT == 0 {
+        let mut current_byte = first_byte;
+        loop {
+            if from_right {
+                current_byte = current_byte.sub(1);
+            } else {
+                current_byte = current_byte.add(1);
+            }
+            size = size + 1;
+            if *current_byte & SIZE_BIT == 0 {
+                break;
+            }
+        }
     }
     check_size(size, 1, get_needed_code_block_size(MAX_PAGE_SIZE));
     size
@@ -300,7 +306,7 @@ unsafe fn generate_code_block_for_payload_size2(
     }
 
     //write the bytes right to left
-    let mut current = left_start_of_block.offset((code_block_size - 1) as isize);
+    let mut current = left_start_of_block.add(code_block_size - 1);
     let mut last = true;
     for _ in 0..code_block_size {
         if last {
@@ -308,7 +314,7 @@ unsafe fn generate_code_block_for_payload_size2(
             *current = (memory_block_size & CONTINUE_DATA_MASK) as u8;
             memory_block_size >>= 7;
             last = false;
-            current = current.offset(-1);
+            current = current.sub(1);
         } else if current == left_start_of_block {
             //current is the leftmost byte
             *current = (memory_block_size & FIRST_DATA_MASK) as u8;
@@ -323,7 +329,7 @@ unsafe fn generate_code_block_for_payload_size2(
         } else {
             *current = ((memory_block_size & CONTINUE_DATA_MASK) | SIZE_BIT as usize) as u8;
             memory_block_size >>= 7;
-            current = current.offset(-1);
+            current = current.sub(1);
         }
     }
 }

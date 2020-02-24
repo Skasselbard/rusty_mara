@@ -19,7 +19,6 @@
                 // "args": ["build", "--bin=foo"] is another possibility
                 "filter": { // Filter applied to compilation artifacts (optional)
                     "name": "consistency",
-                    // "kind": "lib"
                 }
             }
         },

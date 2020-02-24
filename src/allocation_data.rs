@@ -113,7 +113,7 @@ impl AllocationData {
             // first try from data start
             if let Some(start) = self.data_start {
                 self.space.set_size(code_block::read_from_left(start));
-                self.set_code_block_size(code_block::get_block_size(start));
+                self.set_code_block_size(code_block::get_block_size(start, false));
                 self.space.set_ptr(start.add(self.code_block_size()));
                 self.set_data_end(
                     start
@@ -126,7 +126,7 @@ impl AllocationData {
                 if self.space.is_some() {
                     let (memory_size, block) = code_block::read_from_right(self.space.ptr().sub(1));
                     self.space.set_size(memory_size);
-                    self.set_code_block_size(code_block::get_block_size(block));
+                    self.set_code_block_size(code_block::get_block_size(block, false));
                     self.set_data_start(block);
                     self.set_data_end(
                         self.data_start()
@@ -139,7 +139,7 @@ impl AllocationData {
                 else {
                     let (memory_size, block) = code_block::read_from_right(self.data_end());
                     self.space.set_size(memory_size);
-                    self.set_code_block_size(code_block::get_block_size(block));
+                    self.set_code_block_size(code_block::get_block_size(block, false));
                     self.set_data_start(block.sub(self.code_block_size()).sub(memory_size));
                     self.space
                         .set_ptr(self.data_start().add(self.code_block_size()));
@@ -192,11 +192,11 @@ impl AllocationData {
             ((self.data_end() as usize - self.code_block_size()) + 1) as *mut u8;
         for i in 0..self.code_block_size() {
             if current_position as usize <= self.data_end() as usize {
-                *current_position = *(self.data_start().offset(i as isize));
+                *current_position = *(self.data_start().add(i));
             } else {
                 return;
             }
-            current_position = current_position.offset(1);
+            current_position = current_position.add(1);
         }
         #[cfg(feature = "consistency-checks")]
         {
@@ -235,8 +235,6 @@ impl AllocationData {
     /// shrink if the code block get smaller)
     pub unsafe fn write_space_size_code_blocks(&mut self, is_free: bool) {
         code_block::generate_code_block_for_payload_size(self, is_free);
-        self.space
-            .set_ptr(self.data_start().add(self.code_block_size()));
         self.set_data_end(
             self.space
                 .ptr()
@@ -324,7 +322,7 @@ impl AllocationData {
                 if self.space.ptr()
                     != self
                         .data_start()
-                        .add(code_block::get_block_size(self.data_start()))
+                        .add(code_block::get_block_size(self.data_start(), false))
                 {
                     dbg!(self.space.ptr());
                     dbg!(self.data_start().add(self.code_block_size()));

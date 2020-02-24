@@ -1,5 +1,6 @@
 use crate::code_block;
 use crate::page::Page;
+use crate::space::Space;
 use crate::{AllocationData, Mara};
 use core::mem::size_of;
 use rand::distributions::{
@@ -146,7 +147,7 @@ impl Test {
     /// type seed time dynamicMemoryPeak dynamicBlocksPeak staticMemoryPeak staticBlockPeak corrupted_blocks freeSpaceNotInBL
     pub fn run(&mut self) {
         let begin;
-        let mut dynamic_pointers: Vec<*mut u8>;
+        let mut dynamic_pointers: Vec<Space>;
         if cfg!(no_std) {
             unimplemented!()
         } else {
@@ -160,11 +161,10 @@ impl Test {
         let probability_distribution: UniformFloat<f64> = UniformFloat::new(0.0, 1.0);
         let size_distribution = Uniform::new(self.min_size, self.max_size);
 
-        println!("seed\tseconds\tcorrupted blocks\tbucket list free space");
+        println!("seed\tseconds");
         for _iterations in 0..=self.max_iterations {
             for _v in 0..=self.amount_new_variables {
                 let mut var_size;
-
                 loop {
                     // generate a random size in the given boundaries
                     var_size = rng.sample(size_distribution);
@@ -174,14 +174,16 @@ impl Test {
                     }
                 }
 
-                let address;
+                let mut space = Space::new();
                 // request address to dynamic memory and save the address for later deletion
-                address = self.mara.dynamic_new(var_size);
-                dynamic_pointers.push(address);
+                space.set_ptr(self.mara.dynamic_new(var_size));
+                space.set_size(var_size);
+                dynamic_pointers.push(space);
                 if self.fill_strategy != FillRequestedMemory::NoFill {
                     // write address to address
-                    Self::write_into_block(address, var_size, self.fill_strategy);
+                    self.write_space(&mut space);
                 }
+                // self.check_page();
                 // maybe free a dynamic variable
                 let rnd_val: f64 = probability_distribution.sample(&mut rng);
                 if !dynamic_pointers.is_empty() && rnd_val <= self.p_free {
@@ -189,27 +191,19 @@ impl Test {
                         rng.sample(dynamic_variable_distribution) % dynamic_pointers.len() as usize;
                     let to_delete = *dynamic_pointers.get(deleted_index).expect("item not found");
                     unsafe {
-                        let size = code_block::read_from_right(to_delete.sub(1) as *mut u8).0;
-                        for i in 0..size {
-                            *(to_delete.add(i)) = 0b0000_0000;
+                        for i in 0..to_delete.size() {
+                            *(to_delete.ptr().add(i)) = 0b0000_0000;
                         }
                     }
 
-                    self.mara.dynamic_delete(to_delete as *mut u8);
+                    self.mara.dynamic_delete(to_delete.ptr());
                     dynamic_pointers.remove(deleted_index);
+                    // self.check_page();
                 }
             }
-
+            self.check_page();
             let elapsed = begin.elapsed();
-
-            self.check_pages();
-            println!(
-                "{}\t{}\t{}\t\t\t{}",
-                self.seed,
-                elapsed.as_secs(),
-                self.corrupted_blocks,
-                self.free_space_not_in_bucket_list
-            );
+            println!("{}\t{}", self.seed, elapsed.as_secs(),);
         }
     }
 
@@ -222,16 +216,17 @@ impl Test {
      * \param size the block's size
      */
 
-    fn write_into_block(address: *mut u8, size: usize, fill_option: FillRequestedMemory) {
-        if fill_option != FillRequestedMemory::NoFill {
-            let value_at_address = match fill_option {
+    fn write_space(&self, space: &mut Space) {
+        if self.fill_strategy != FillRequestedMemory::NoFill {
+            let value_at_address = match self.fill_strategy {
                 FillRequestedMemory::NoFill => panic!("should be unreachable"),
                 FillRequestedMemory::Zeroes => 0,
                 FillRequestedMemory::Ones => 1,
-                FillRequestedMemory::AddressShortcut => address as usize,
+                FillRequestedMemory::AddressShortcut => space.ptr() as usize,
             };
-            for i in 0..size / size_of::<usize>() {
-                unsafe { *(address.add(i) as *mut usize) = value_at_address };
+            // iterate in windows of usize
+            for i in 0..space.size() / size_of::<usize>() {
+                unsafe { *(space.ptr() as *mut usize).add(i) = value_at_address };
             }
         }
     }
@@ -241,60 +236,47 @@ impl Test {
     /// If the block is not free, checks it for consistency by checking if the content corresponds to what write_into_block
     /// had written into it after requesting it.
     /// Errors are counted using the variables "free_space_not_in_bucket_list" and "corrupted_blocks".
-    fn check_pages(&mut self) {
+    fn check_page(&mut self) {
         unsafe {
             self.free_space_not_in_bucket_list = 0;
             self.corrupted_blocks = 0;
 
-            let mut page = self.mara.page_list().get_page();
+            let page = self.mara.page_list().get_page();
+            let mut alloc = AllocationData::new();
+            alloc.set_page(page as *mut Page);
+            alloc.set_data_start((*page).start_of_page() as *mut u8);
+            alloc.cache_code_blocks();
             loop {
-                let mut block_pointer = (*page).start_of_page() as *mut u8;
-                while block_pointer < (*page).end_of_page() as *mut u8 {
-                    let memory_size = code_block::read_from_left(block_pointer);
-                    let code_block_size = code_block::get_block_size(block_pointer);
-                    if !code_block::is_free(block_pointer) {
-                        if self.fill_strategy != FillRequestedMemory::NoFill {
-                            let memory_start =
-                                (block_pointer as usize + code_block_size) as *mut usize;
-                            for i in 0..(memory_size / 8) {
-                                let valid = match self.fill_strategy {
-                                    FillRequestedMemory::NoFill => panic!("should be unreachable"),
-                                    FillRequestedMemory::Zeroes => *(memory_start.add(i)) == 0,
-                                    FillRequestedMemory::Ones => *(memory_start.add(i)) == 0,
-                                    FillRequestedMemory::AddressShortcut => {
-                                        *(memory_start.add(i)) == *memory_start
-                                    }
-                                };
-                                if !valid {
-                                    self.corrupted_blocks = self.corrupted_blocks + 1;
+                alloc.check_consistency();
+                if !code_block::is_free(alloc.data_start()) {
+                    (*page).bucket_list().check_in_list(&alloc.space, false);
+                    if self.fill_strategy != FillRequestedMemory::NoFill {
+                        for i in 0..(alloc.space.size() / size_of::<usize>()) {
+                            let valid = match self.fill_strategy {
+                                FillRequestedMemory::NoFill => panic!("should be unreachable"),
+                                FillRequestedMemory::Zeroes => {
+                                    *((alloc.data_start() as *mut usize).add(i)) == 0
                                 }
+                                FillRequestedMemory::Ones => {
+                                    *((alloc.data_start() as *mut usize).add(i)) == 1
+                                }
+                                FillRequestedMemory::AddressShortcut => {
+                                    *((alloc.data_start() as *mut usize).add(i))
+                                        == *(alloc.data_start() as *mut usize)
+                                }
+                            };
+                            if !valid {
+                                panic!("corupted allocation")
                             }
-                        }
-                    } else {
-                        let current_element = &mut AllocationData::new();
-                        current_element.space.set_size(memory_size);
-                        // current_element
-                        //     .space
-                        //     .set_ptr(bucket_list.first_for_size(current_element.space.size()));
-                        current_element.set_page(page as *mut Page);
-                        //TODO: data start berechnen
-                        while current_element.data_start() != block_pointer as *mut u8 {
-                            if current_element.data_start().is_null() {
-                                break;
-                            }
-                            let next = current_element.space.read_next((*page).start_of_page());
-                            // current_element.space.set_ptr(next)
-                        }
-                        if current_element.space.ptr().is_null() {
-                            self.free_space_not_in_bucket_list =
-                                self.free_space_not_in_bucket_list + 1;
                         }
                     }
-                    block_pointer =
-                        block_pointer.offset((memory_size + 2 * code_block_size) as isize);
+                } else {
+                    (*page).bucket_list().check_in_list(&alloc.space, true);
                 }
-                page = (*page).get_next_page();
-                if !(page != (*self.mara.page_list()).get_page()) {
+                if let Some(neighbor) = alloc.right_neighbor() {
+                    alloc = neighbor;
+                } else {
+                    assert_eq!(alloc.data_end(), (*page).end_of_page() as *mut u8);
                     break;
                 }
             }

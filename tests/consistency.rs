@@ -1,6 +1,6 @@
 extern crate rusty_mara;
 #[test]
-fn test() {
+fn test_short() {
     use rusty_mara::TestBuilder;
     const MEMORY_SIZE: usize = 0x4000_0000; // 1GB
     let mut memory: Box<[u8]> = vec![0; MEMORY_SIZE].into_boxed_slice();

@@ -10,8 +10,11 @@ pub const BUCKET_LIST_SIZE: usize = LAST_LINEAR_4_SCALING / 4
     + (LOG2_1024 - LOG2_128)
     + 1;
 
-pub const MAX_PAGE_SIZE: usize = ERROR_NEXT_POINTER as usize + 1; //2^32 byte ~ 4Gb
-pub const SMALLEST_POSSIBLE_FREE_SPACE: usize = size_of::<NextPointerType>();
+// The next pointer is an offset from the page start so we can go at most ~4GB with an u32
+pub const MAX_PAGE_SIZE: usize = NextPointerType::max_value() as usize + 1; //2^32 byte ~ 4Gb
+
+// a next pointer plus tow code blocks
+pub const SMALLEST_POSSIBLE_FREE_SPACE: usize = size_of::<NextPointerType>() + 2;
 
 pub type NextPointerType = u32;
 pub const ERROR_NEXT_POINTER: NextPointerType = NextPointerType::max_value(); // just ones

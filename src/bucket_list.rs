@@ -240,7 +240,7 @@ impl BucketList {
                     .expect("Bucket is empty")
                     .ptr() as *mut u8;
                 let (memory_size, block) = code_block::read_from_right(space.sub(1));
-                let block_size = code_block::get_block_size(block);
+                let block_size = code_block::get_block_size(block, false);
                 if !(memory_size == (*self.page).page_size() - 2 * block_size) {
                     dbg!(space);
                     dbg!(block_size);

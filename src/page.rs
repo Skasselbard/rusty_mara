@@ -54,20 +54,17 @@ impl Page {
                     self.check_integrity();
                     return;
                 }
-                Some(mut free_space) => {
+                Some(free_space) => {
                     // Remove this free space from list
                     // the remaining space will be added again later
-                    free_space.cache_size_from_code_block();
                     self.bucket_list.remove(&free_space);
                     // Calculate where the allocation starts
                     // It will be at the beginning of the found free space
                     alloc_data.set_data_start(
                         free_space
                             .ptr()
-                            .sub(code_block::get_needed_code_block_size(free_space.size())),
+                            .sub(code_block::get_block_size(free_space.ptr().sub(1), true)),
                     );
-                    // next has to be cached
-                    free_space.cache_next(self.start_of_page);
                     // split the free space in two
                     let mut remaining = self.split_free_space(alloc_data, free_space);
                     // check if no space remains
@@ -105,6 +102,10 @@ impl Page {
     ) -> AllocationData {
         unsafe {
             self.check_split_pre(alloc_data, &free_space);
+            // TODO: remove
+            if let Some(neighbor) = alloc_data.left_neighbor() {
+                neighbor.check_consistency()
+            };
 
             let mut free_alloc = AllocationData::new();
             // Space to small to cut something of
@@ -118,7 +119,7 @@ impl Page {
                     free_space
                         .ptr()
                         .add(free_space.size())
-                        .add(code_block::get_block_size(alloc_data.data_start()))
+                        .add(code_block::get_block_size(alloc_data.data_start(), false))
                         .sub(1),
                 );
                 // cache
@@ -155,6 +156,7 @@ impl Page {
             // at the start of the page
             if let Some(mut left_alloc) = alloc_data.left_neighbor() {
                 if code_block::is_free(left_alloc.data_start()) {
+                    left_alloc.check_consistency();
                     alloc_data.set_data_start(left_alloc.data_start());
                     left_alloc.space.cache_next(self.start_of_page);
                     self.bucket_list.remove(&left_alloc.space);
@@ -166,6 +168,7 @@ impl Page {
             // at the end of the page
             if let Some(mut right_alloc) = alloc_data.right_neighbor() {
                 if code_block::is_free(right_alloc.data_start()) {
+                    right_alloc.check_consistency();
                     alloc_data.set_data_end(right_alloc.data_end());
                     right_alloc.space.cache_next(self.start_of_page);
                     self.bucket_list.remove(&right_alloc.space);
@@ -178,6 +181,7 @@ impl Page {
             alloc_data.write_data_size_code_blocks(true);
             self.bucket_list.insert(&mut alloc_data.space);
             self.bucket_list.check_in_list(&alloc_data.space, true);
+            alloc_data.check_neighbors();
         }
     }
     #[inline]
@@ -313,10 +317,13 @@ impl Page {
         #[cfg(feature = "consistency-checks")]
         {
             unsafe {
+                left_alloc.check_neighbors();
+                right_alloc.check_neighbors();
                 // read code blocks
                 let left_memory_size = code_block::read_from_left(left_alloc.data_start());
                 let right_memory_size = code_block::read_from_left(right_alloc.data_start());
-                let left_code_block_size = code_block::get_block_size(left_alloc.data_start());
+                let left_code_block_size =
+                    code_block::get_block_size(left_alloc.data_start(), false);
                 // let right_code_block_size = code_block::get_block_size(right_alloc.data_start());
                 self.check_alloc(left_alloc);
                 self.check_alloc(right_alloc);
