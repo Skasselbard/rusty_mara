@@ -4,20 +4,19 @@ use crate::space::Space;
 use crate::Page;
 
 pub struct BucketList {
-    /// The array with the information of the dynamic free sections
-    ///
+    /// The array with the information of free sections
     /// The space pointed to at the given index is the first one of the size class.
-    ///
     /// Each index represent another size class. Increasing indices represent increasing size classes.
     bucket_list: [*mut u8; BUCKET_LIST_SIZE],
-
     page: *mut Page,
 }
 impl BucketList {
-    /// #### index
-    /// start index to search. The returned index will be greater or equal to this index.
-    /// #### return
-    /// a bucket index with a non null entry. The index will always be >= the given index.
+    /// **index**:
+    /// start index to search. The returned index will be greater or equal
+    /// to this index.
+    ///
+    /// Returns a bucket index with a non null entry.
+    /// The index will always be >= the given index.
     #[inline]
     fn find_non_empty_bucket(&self, mut index: usize) -> usize {
         #[cfg(feature = "consistency-checks")]
@@ -38,8 +37,10 @@ impl BucketList {
         index
     }
     /// Greedy search in the bucket.
-    /// Returns the first element that matches the size and ignores the actual size
-    /// Null ``space.ptr`` if no fitting space is found in the bucket, a free_space with a size greater than byte
+    /// Returns the first element that matches the size and ignores the actual size.
+    /// None if no fitting space is found in the bucket,
+    /// else Some(free_space) with a size greater than byte.
+    /// As the name implies only the bucket with the given index is searched
     #[inline]
     unsafe fn find_fitting_space_in_bucket(
         &self,
@@ -63,7 +64,6 @@ impl BucketList {
         self.check_found(&space, minimum_size);
         space
     }
-
     /// Initializes a new bucket list.
     /// All entries are zeroed
     #[inline]
@@ -73,8 +73,9 @@ impl BucketList {
             self.bucket_list[i] = core::ptr::null_mut();
         }
     }
-    /// This function does only give a free_space of the page. It does not alter the list itself.
-    /// Non if no space was found
+    /// Searches all appropriate buckets for a fitting size
+    /// The list is not altered.
+    /// None if no space was found.
     #[inline]
     pub unsafe fn get_free_space(&self, minimum_size: usize) -> Option<Space> {
         #[cfg(feature = "consistency-checks")]
@@ -126,7 +127,8 @@ impl BucketList {
             panic!("Allocation not found");
         }
     }
-    /// A pointer on a space pointer from the bucket with the given index
+    /// The stored space from the bucket with the given index
+    /// Additional elements in this bucket are chained by the next pointers
     #[inline]
     fn get(&self, index: usize) -> Option<Space> {
         match self.bucket_list[index] {
@@ -138,7 +140,7 @@ impl BucketList {
             }
         }
     }
-    /// A pointer on a space pointer with a size grater or equal to ``size``
+    /// The space from the bucket that matches ``size``
     #[inline]
     pub fn first_for_size(&self, size: usize) -> Option<Space> {
         match self.bucket_list[Self::lookup_bucket(size)] {
@@ -150,6 +152,9 @@ impl BucketList {
             }
         }
     }
+    /// Adds ``space`` to the bucket list.
+    /// It will be the new first space for the matching bucket.
+    /// The old first will be the new next of ``space``
     pub unsafe fn insert(&mut self, space: &mut Space) {
         self.check_in_list(space, false);
 
@@ -160,7 +165,8 @@ impl BucketList {
         self.check_in_list(space, true);
     }
 
-    /// Get the correct index in the bucket list for a block with the given memory size (without codeblocks)
+    /// Get the correct index in the bucket list for a block with the given
+    /// memory size (without codeblocks)
     pub fn lookup_bucket(size: usize) -> usize {
         #[cfg(feature = "consistency-checks")]
         {
@@ -179,10 +185,10 @@ impl BucketList {
             return BUCKET_LIST_SIZE - 1;
         }
     }
-    /// #### free_space
-    /// the Space to search for
-    /// #### return
-    /// is in list and the predecessor, if one is found(Output)
+    /// Checks if ``space`` is in the bucket list.
+    /// If so returns true.
+    /// Additionally the predecessor of ``space`` is returned in the second part
+    /// of the return tuple.
     #[inline]
     pub unsafe fn is_in_list(&self, space: &Space) -> (bool, Option<Space>) {
         if let Some(mut predecessor) = self.first_for_size(space.size()) {

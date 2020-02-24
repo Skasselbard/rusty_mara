@@ -6,6 +6,11 @@ use crate::AllocationData;
 use core::mem::size_of;
 use core::ops::*;
 
+/// The instance that stores the allocations.
+/// Page object data (size information and bucket list) is stored in front 
+/// of the allocation data.
+/// The space that is free to allocate in the future is managed in the
+/// bucket list.
 pub struct Page {
     /// Pointer to the first byte of the page
     start_of_page: *const u8,
@@ -42,7 +47,9 @@ impl Page {
             alloc_data.check_data_size(page_size, page_size);
         }
     }
-    /// tries to reserve a dynamic block in this page, and returns it
+    /// Tries to reserve a dynamic block in this page.
+    /// if one is found the space pointer of the allocation will be set
+    /// otherwise the pointer will be uninitialized
     pub fn get_dynamic_block(&mut self, alloc_data: &mut AllocationData) {
         unsafe {
             alloc_data.set_page(self);
@@ -85,13 +92,12 @@ impl Page {
             self.check_dynamic_new_post(alloc_data);
         }
     }
-    /// Splits ``free_alloc`` into two separate parts.
+    /// Splits ``free_space`` into two separate parts.
     /// ``alloc data`` will be the left side of the split,
-    /// and ``free_alloc`` will be the right side.
+    /// and the returned allocation will be the right side.
     /// The left part is expected to be used as allocation **return**,
     /// so its ``next`` pointer will not be updated.
-    /// Instead the old next pointer will be the new next pointer of right space.
-    /// If the remaining space is not big enough it will not be split.
+    /// If the remaining space is not big enough the space will not be split.
     /// In that case an AllocationData with a ``space_size`` of ``0`` is returned
     /// During the process the code blocks are update accordingly
     #[inline]
@@ -102,10 +108,6 @@ impl Page {
     ) -> AllocationData {
         unsafe {
             self.check_split_pre(alloc_data, &free_space);
-            // TODO: remove
-            if let Some(neighbor) = alloc_data.left_neighbor() {
-                neighbor.check_consistency()
-            };
 
             let mut free_alloc = AllocationData::new();
             // Space to small to cut something of
@@ -134,7 +136,7 @@ impl Page {
             free_alloc
         }
     }
-    /// Deletes a reserved block and adds it into bucket list again.
+    /// Deletes a reserved block and adds it into the bucket list again.
     /// If the neighboring spaces are free they are merged wit this space.
     pub fn delete_block(&mut self, alloc_data: &mut AllocationData) {
         alloc_data.set_page(self);
@@ -147,8 +149,8 @@ impl Page {
         self.merge_with_neighbors(alloc_data);
         self.check_integrity();
     }
-    /// checks both neighboring spaces if they are free
-    /// if so they are merged with the given allocation
+    /// Checks for both neighboring spaces if they are free.
+    /// If so they are merged with the given allocation.
     #[inline]
     fn merge_with_neighbors(&mut self, alloc_data: &mut AllocationData) {
         unsafe {
@@ -188,23 +190,11 @@ impl Page {
     pub fn page_size(&self) -> usize {
         self.end_of_page as usize - self.start_of_page as usize + 1
     }
-    #[inline]
-    /// return the next page in the ring storage
-    pub fn get_next_page(&self) -> *mut Self {
-        self.next_page
-    }
     /// sets the next page
     #[inline]
     pub fn set_next_page(&mut self, next_page: *mut Self) {
         if next_page != core::ptr::null_mut() {}
         self.next_page = next_page;
-    }
-    /// True if ``ptr`` is in between the start of page and the left most
-    /// byte of the static sector.
-    /// False otherwise.
-    #[inline]
-    pub fn block_is_in_space(&self, ptr: *mut u8) -> bool {
-        self.start_of_page <= ptr && ptr < self.end_of_page as *mut u8
     }
     #[inline]
     pub fn start_of_page(&self) -> *const u8 {

@@ -15,7 +15,7 @@ pub use consistency::TestBuilder;
 use alloc::alloc::{GlobalAlloc, Layout};
 use allocation_data::AllocationData;
 use core::cell::UnsafeCell;
-use core::mem::{size_of, transmute};
+use core::mem::transmute;
 use page::Page;
 use page_list::PageList;
 

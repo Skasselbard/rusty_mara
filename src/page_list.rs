@@ -7,10 +7,6 @@ use core::mem::size_of;
 pub struct PageList {
     /// The first page in the ring that will be searched
     first_page: *mut Page,
-    /// All things that have to be stored
-    /// This includes the heap and all object data we need for the heap
-    /// On PageList creation some of the data was reserved for the page list
-    data: *mut u8,
     /// Size of the data array
     data_size: usize,
 }
@@ -33,7 +29,6 @@ impl PageList {
         unsafe { (*first_page).set_next_page(first_page) };
         Self {
             first_page,
-            data,
             data_size: data_size,
         }
     }
